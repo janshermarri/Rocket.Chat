@@ -1,6 +1,9 @@
 import { Mongo } from 'meteor/mongo';
 import { create } from 'zustand';
 
+import type { ILocalCollection } from './ILocalCollection';
+import { LocalCollection } from './LocalCollection';
+
 export type MinimongoSelector<T> = Mongo.Selector<T>;
 export type MinimongoOptions<T> = Mongo.Options<T>;
 
@@ -14,21 +17,14 @@ interface IDocumentMapStore<T extends { _id: string }> {
 }
 
 export class MinimongoCollection<T extends { _id: string }> extends Mongo.Collection<T> {
-	protected declare _collection: Mongo.Collection<T> & {
-		queries: Record<number, { __brand: 'query' }>;
-		_docs: {
-			_idStringify: (id: string) => string;
-			_map: Map<T['_id'], T>;
-		};
-		_recomputeResults: (query: { __brand: 'query' }) => void;
-	};
-
 	readonly use = create<IDocumentMapStore<T>>()((_set, get) => ({
 		records: [],
 		get: (id: T['_id']) => get().records.find((record) => record._id === id),
 		find: (predicate: (record: T) => boolean) => get().records.find(predicate),
 		filter: (predicate: (record: T) => boolean) => get().records.filter(predicate),
 	}));
+
+	protected _collection: ILocalCollection<T> = new LocalCollection<T>();
 
 	constructor() {
 		super(null);
@@ -64,7 +60,10 @@ export class MinimongoCollection<T extends { _id: string }> extends Mongo.Collec
 				internal = false;
 				return;
 			}
-			this._collection._docs._map = new Map(state.records.map((record) => [this._collection._docs._idStringify(record._id), record]));
+			this._collection._docs.clear();
+			for (const record of state.records) {
+				this._collection._docs.set(record._id, record);
+			}
 		});
 	}
 
@@ -79,11 +78,9 @@ export class MinimongoCollection<T extends { _id: string }> extends Mongo.Collec
 	}
 
 	async bulkMutate(fn: () => Promise<void>) {
-		const { queries } = this._collection;
-		this._collection.queries = {};
+		this._collection.pauseObservers();
 		await fn();
-		this._collection.queries = queries;
-		this.recomputeQueries();
+		this._collection.resumeObserversClient();
 	}
 
 	replaceAll(records: T[]) {
