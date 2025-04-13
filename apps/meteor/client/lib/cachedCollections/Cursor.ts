@@ -2,6 +2,7 @@ import { EJSON } from 'meteor/ejson';
 import { Meteor } from 'meteor/meteor';
 import type { Filter, Hint, Sort } from 'mongodb';
 
+import type { IIdMap } from './IdMap';
 import { IdMap } from './IdMap';
 import { LocalCollection } from './LocalCollection';
 import { Matcher } from './Matcher';
@@ -59,7 +60,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 	matcher: Matcher<T>;
 
-	private _selectorId: T['_id'] | undefined;
+	protected _selectorId: T['_id'] | undefined;
 
 	skip: number;
 
@@ -67,9 +68,9 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 	fields: FieldSpecifier | undefined;
 
-	private _projectionFn: (doc: Omit<T, '_id'>) => TProjection;
+	protected _projectionFn: (doc: Omit<T, '_id'>) => TProjection;
 
-	private _transform: TOptions['transform'];
+	protected _transform: TOptions['transform'];
 
 	reactive: boolean | undefined;
 
@@ -331,18 +332,26 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 			throw Error('You may not observe a cursor with {fields: {_id: 0}}');
 		}
 
-		const distances = this.matcher.hasGeoQuery() && ordered ? new IdMap<T['_id'], number>() : undefined;
-
-		const query: Query<T, TOptions, TProjection> = {
-			cursor: this,
-			dirty: false,
-			distances,
-			matcher: this.matcher, // not fast pathed
-			ordered,
-			projectionFn: this._projectionFn,
-			resultsSnapshot: null,
-			sorter: ordered && this.sorter,
-		};
+		const query: Query<T, TOptions, TProjection> = ordered
+			? {
+					cursor: this,
+					dirty: false,
+					distances: this.matcher.hasGeoQuery() ? new IdMap<T['_id'], number>() : undefined,
+					matcher: this.matcher, // not fast pathed
+					ordered,
+					projectionFn: this._projectionFn,
+					resultsSnapshot: null,
+					sorter: this.sorter!,
+				}
+			: {
+					cursor: this,
+					dirty: false,
+					matcher: this.matcher, // not fast pathed
+					ordered,
+					projectionFn: this._projectionFn,
+					resultsSnapshot: null,
+					sorter: null,
+				};
 
 		let qid: number;
 
@@ -393,7 +402,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		query.changed = wrapCallback(options.changed);
 		query.removed = wrapCallback(options.removed);
 
-		if (ordered) {
+		if (query.ordered) {
 			query.addedBefore = wrapCallback(options.addedBefore);
 			query.movedBefore = wrapCallback(options.movedBefore);
 		}
@@ -404,7 +413,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 				delete fields._id;
 
-				if (ordered) {
+				if (query.ordered) {
 					query.addedBefore!(doc._id, this._projectionFn(fields), null);
 				}
 
@@ -417,8 +426,8 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 				}
 			}
 			// it means it's an id map
-			if ((query.results as IdMap<T['_id'], T>).size?.()) {
-				(query.results as IdMap<T['_id'], T>).forEach(handler);
+			if ((query.results as IIdMap<T['_id'], T>).size?.()) {
+				(query.results as IIdMap<T['_id'], T>).forEach(handler);
 			}
 		}
 
@@ -523,15 +532,19 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	// (otherwise it will just create its own _IdMap). The observeChanges
 	// implementation uses this to remember the distances after this function
 	// returns.
-	_getRawObjects(options: { ordered: true; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> }): T[];
+	_getRawObjects(options: { ordered: true; applySkipLimit?: boolean; distances?: IIdMap<T['_id'], number> }): T[];
 
-	_getRawObjects(options: { ordered: false; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> }): IdMap<T['_id'], T>;
+	_getRawObjects(options: { ordered: false; applySkipLimit?: boolean; distances?: IIdMap<T['_id'], number> }): IIdMap<T['_id'], T>;
 
-	_getRawObjects(options?: { ordered?: boolean; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> }): IdMap<T['_id'], T> | T[];
+	_getRawObjects(options?: {
+		ordered?: boolean;
+		applySkipLimit?: boolean;
+		distances?: IIdMap<T['_id'], number>;
+	}): IIdMap<T['_id'], T> | T[];
 
 	_getRawObjects(
-		options: { ordered?: boolean; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> } = {},
-	): IdMap<T['_id'], T> | T[] {
+		options: { ordered?: boolean; applySkipLimit?: boolean; distances?: IIdMap<T['_id'], number> } = {},
+	): IIdMap<T['_id'], T> | T[] {
 		// By default this method will respect skip and limit because .fetch(),
 		// .forEach() etc... expect this behaviour. It can be forced to ignore
 		// skip and limit by setting applySkipLimit to false (.count() does this,
@@ -540,7 +553,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 		// XXX use OrderedDict instead of array, and make IdMap and OrderedDict
 		// compatible
-		const results: T[] | IdMap<T['_id'], T> = options.ordered ? [] : new IdMap<T['_id'], T>();
+		const results: T[] | IIdMap<T['_id'], T> = options.ordered ? [] : new IdMap<T['_id'], T>();
 
 		// fast path for single ID value
 		if (this._selectorId !== undefined) {
@@ -555,7 +568,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 				if (options.ordered) {
 					(results as T[]).push(selectedDoc);
 				} else {
-					(results as IdMap<T['_id'], T>).set(this._selectorId, selectedDoc);
+					(results as IIdMap<T['_id'], T>).set(this._selectorId, selectedDoc);
 				}
 			}
 			return results;
@@ -566,7 +579,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		// in the observeChanges case, distances is actually part of the "query"
 		// (ie, live results set) object.  in other cases, distances is only used
 		// inside this function.
-		let distances: IdMap<T['_id'], number> | undefined;
+		let distances: IIdMap<T['_id'], number> | undefined;
 		if (this.matcher.hasGeoQuery() && options.ordered) {
 			if (options.distances) {
 				distances = options.distances;
@@ -587,7 +600,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 							distances.set(id, matchResult.distance);
 						}
 					} else {
-						(results as IdMap<T['_id'], T>).set(id, doc);
+						(results as IIdMap<T['_id'], T>).set(id, doc);
 					}
 				}
 

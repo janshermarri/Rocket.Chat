@@ -46,7 +46,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	// null if not saving originals; an IdMap from id to original document value
 	// if saving originals. See comments before saveOriginals().
-	private _savedOriginals: IdMap<T['_id'], T | undefined> | null = null;
+	private _savedOriginals: IIdMap<T['_id'], T | undefined> | null = null;
 
 	paused = false;
 
@@ -240,7 +240,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			if (query.ordered) {
 				query.results = [];
 			} else {
-				(query.results as IdMap<T['_id'], T>).clear();
+				(query.results as IIdMap<T['_id'], T>).clear();
 			}
 		});
 
@@ -453,7 +453,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// it. (We don't need to save the original results of paused queries because
 		// they already have a resultsSnapshot and we won't be diffing in
 		// _recomputeResults.)
-		const qidToOriginalResults: Record<string, IdMap<T['_id'], T> | T[]> = {};
+		const qidToOriginalResults: Record<string, IIdMap<T['_id'], T> | T[]> = {};
 
 		// We should only clone each document once, even if it appears in multiple
 		// queries
@@ -853,7 +853,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			} else {
 				// Because we don't support skip or limit (yet) in unordered queries, we
 				// can just do a direct lookup.
-				matchedBefore[qid] = (query.results as IdMap<T['_id'], T>).has(doc._id);
+				matchedBefore[qid] = (query.results as IIdMap<T['_id'], T>).has(doc._id);
 			}
 		});
 
@@ -963,7 +963,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// applied.
 	//
 	// oldResults is guaranteed to be ignored if the query is not paused.
-	_recomputeResults(query: Query<T, Options<T>, any>, oldResults?: IdMap<T['_id'], T> | T[]) {
+	_recomputeResults(query: Query<T, Options<T>, any>, oldResults?: IIdMap<T['_id'], T> | T[]) {
 		if (this.paused) {
 			// There's no reason to recompute the results now as we're still paused.
 			// By flagging the query as "dirty", the recompute will be performed
@@ -1018,7 +1018,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	static _CachingChangeObserver = class _CachingChangeObserver<T extends { _id: string }> {
 		ordered: boolean;
 
-		docs: IdMap<T['_id'], T> | OrderedDict<T['_id'], T>;
+		docs: IIdMap<T['_id'], T> | OrderedDict<T['_id'], T>;
 
 		applyChange: any;
 
@@ -1083,7 +1083,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 						doc._id = id;
 
-						(this.docs as IdMap<T['_id'], T>).set(id, doc);
+						(this.docs as IIdMap<T['_id'], T>).set(id, doc);
 					},
 				};
 			}
@@ -1318,7 +1318,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	static _diffQueryUnorderedChanges = DiffSequence.diffQueryUnorderedChanges;
 
-	static _findInOrderedResults = (query: any, doc: any): number => {
+	static _findInOrderedResults(query: any, doc: any): number {
 		if (!query.ordered) {
 			throw new Error("Can't call _findInOrderedResults on unordered query");
 		}
@@ -1330,7 +1330,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 
 		throw Error('object missing from query');
-	};
+	}
 
 	// If this is a selector which explicitly constrains the match by ID to a finite
 	// number of documents, returns a list of their IDs.  Otherwise returns
@@ -1383,7 +1383,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return null;
 	}
 
-	static _insertInResultsSync = (query: any, doc: any) => {
+	static _insertInResultsSync(query: any, doc: any) {
 		const fields = EJSON.clone(doc);
 
 		delete fields._id;
@@ -1410,9 +1410,9 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			query.added(doc._id, query.projectionFn(fields));
 			query.results.set(doc._id, doc);
 		}
-	};
+	}
 
-	static _insertInResultsAsync = async (query: any, doc: any) => {
+	static async _insertInResultsAsync(query: any, doc: any) {
 		const fields = EJSON.clone(doc);
 
 		delete fields._id;
@@ -1439,9 +1439,9 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			await query.added(doc._id, query.projectionFn(fields));
 			query.results.set(doc._id, doc);
 		}
-	};
+	}
 
-	static _insertInSortedList = (cmp: any, array: any, value: any) => {
+	static _insertInSortedList(cmp: any, array: any, value: any) {
 		if (array.length === 0) {
 			array.push(value);
 			return 0;
@@ -1452,9 +1452,9 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		array.splice(i, 0, value);
 
 		return i;
-	};
+	}
 
-	static _isModificationMod = (mod: any) => {
+	static _isModificationMod(mod: any) {
 		let isModify = false;
 		let isReplace = false;
 
@@ -1471,7 +1471,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 
 		return isModify;
-	};
+	}
 
 	// XXX maybe this should be EJSON.isObject, though EJSON doesn't know about
 	// RegExp

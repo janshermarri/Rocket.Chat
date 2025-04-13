@@ -1,5 +1,5 @@
 import type { SortSpecifier } from './Cursor';
-import type { IdMap } from './IdMap';
+import type { IIdMap } from './IdMap';
 import { LocalCollection } from './LocalCollection';
 import { Matcher } from './Matcher';
 import { expandArraysInBranches, hasOwn, makeLookupFunction } from './common';
@@ -99,7 +99,7 @@ export class Sorter<T extends { _id: string }> {
 		this._keyComparator = composeComparators(this._sortSpecParts.map((_spec, i) => this._keyFieldComparator(i)));
 	}
 
-	getComparator(options?: { distances?: IdMap<T['_id'], number> }): (a: T, b: T) => number {
+	getComparator(options?: { distances?: IIdMap<T['_id'], number> }): (a: T, b: T) => number {
 		// If sort is specified or have no distances, just use the comparator from
 		// the source specification (which defaults to "everything is equal".
 		// issue #3599
