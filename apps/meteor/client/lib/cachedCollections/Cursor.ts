@@ -2,7 +2,7 @@ import { EJSON } from 'meteor/ejson';
 import { Meteor } from 'meteor/meteor';
 import type { Filter, Hint, Sort } from 'mongodb';
 
-import type { IIdMap } from './IdMap';
+import type { IIdMap } from './IIdMap';
 import { IdMap } from './IdMap';
 import { LocalCollection } from './LocalCollection';
 import { Matcher } from './Matcher';
@@ -13,13 +13,9 @@ import type { Query } from './Query';
 import { Sorter } from './Sorter';
 import { hasOwn } from './common';
 
-export type SortSpecifier = Sort;
-
 type FieldSpecifier = {
 	[id: string]: number | boolean;
 };
-
-export type Selector<T> = Filter<T>;
 
 type Transform<T> = ((doc: T) => any) | null | undefined;
 
@@ -31,7 +27,7 @@ export type DispatchTransform<TTransform, T, TProjection> = TTransform extends (
 
 export type Options<T> = {
 	/** Sort order (default: natural order) */
-	sort?: SortSpecifier | undefined;
+	sort?: Sort | undefined;
 	/** Number of results to skip at the beginning */
 	skip?: number | undefined;
 	/** Maximum number of results to return */
@@ -75,7 +71,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	reactive: boolean | undefined;
 
 	// don't call this ctor directly.  use LocalCollection.find().
-	constructor(collection: LocalCollection<T>, selector: Selector<T>, options?: TOptions) {
+	constructor(collection: LocalCollection<T>, selector: Filter<T>, options?: TOptions) {
 		this.collection = collection;
 		this.sorter = null;
 		this.matcher = new Matcher(selector);
@@ -353,12 +349,12 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 					sorter: null,
 				};
 
-		let qid: number;
+		let qid: string;
 
 		// Non-reactive queries call added[Before] and then never call anything
 		// else.
 		if (this.reactive) {
-			qid = this.collection.next_qid++;
+			qid = this.collection.claimNextQueryId();
 			this.collection.queries[qid] = query;
 		}
 

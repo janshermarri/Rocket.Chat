@@ -1,12 +1,13 @@
 import { EJSON } from 'meteor/ejson';
 import { Meteor } from 'meteor/meteor';
-import type { CountDocumentsOptions } from 'mongodb';
+import type { CountDocumentsOptions, Filter, UpdateFilter } from 'mongodb';
+import type { StoreApi, UseBoundStore } from 'zustand';
 
-import type { Options, Selector } from './Cursor';
+import type { Options } from './Cursor';
 import { Cursor } from './Cursor';
 import { DiffSequence } from './DiffSequence';
+import type { IIdMap } from './IIdMap';
 import type { ILocalCollection } from './ILocalCollection';
-import type { IIdMap } from './IdMap';
 import { IdMap } from './IdMap';
 import { Matcher } from './Matcher';
 import type { ObserveCallbacks } from './ObserveCallbacks';
@@ -33,7 +34,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	readonly _observeQueue = new Meteor._SynchronousQueue();
 
-	next_qid = 1; // live query id generator
+	private next_qid = 1; // live query id generator
 
 	// qid -> live query object. keys:
 	//  ordered: bool. ordered queries have addedBefore/movedBefore callbacks.
@@ -50,7 +51,34 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	paused = false;
 
-	countDocuments(selector?: Selector<T>, options?: CountDocumentsOptions) {
+	constructor(protected store: UseBoundStore<StoreApi<{ records: T[] }>>) {
+		this.find({}).observe({
+			added: (record) => {
+				store.setState((state) => ({ records: [...state.records, record] }));
+			},
+			changed: (record) => {
+				store.setState((state) => {
+					const records = [...state.records];
+					const index = records.findIndex((r) => r._id === record._id);
+					if (index !== -1) {
+						records[index] = { ...record };
+					}
+					return { records };
+				});
+			},
+			removed: (record) => {
+				store.setState((state) => ({
+					records: state.records.filter((r) => r._id !== record._id),
+				}));
+			},
+		});
+	}
+
+	claimNextQueryId() {
+		return `${this.next_qid++}`;
+	}
+
+	countDocuments(selector?: Filter<T>, options?: CountDocumentsOptions) {
 		return this.find(selector ?? {}, options).countAsync();
 	}
 
@@ -76,11 +104,11 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// XXX sort does not yet support subkeys ('a.b') .. fix that!
 	// XXX add one more sort form: "key"
 	// XXX tests
-	find(selector: Selector<T> = {}, options?: Options<T>) {
+	find(selector: Filter<T> = {}, options?: Options<T>) {
 		return new Cursor(this, selector, options);
 	}
 
-	findOne(selector?: Selector<T>, options: Options<T> = {}) {
+	findOne(selector?: Filter<T>, options: Options<T> = {}) {
 		// NOTE: by setting limit 1 here, we end up using very inefficient
 		// code that recomputes the whole query on each update. The upside is
 		// that when you reactively depend on a findOne you only get
@@ -94,7 +122,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return this.find(selector, options).fetch()[0];
 	}
 
-	async findOneAsync(selector: Selector<T> = {}, options: Options<T> = {}) {
+	async findOneAsync(selector: Filter<T> = {}, options: Options<T> = {}) {
 		options.limit = 1;
 		return (await this.find(selector, options).fetchAsync())[0];
 	}
@@ -253,7 +281,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return result;
 	}
 
-	prepareRemove(selector: Selector<T>) {
+	prepareRemove(selector: Filter<T>) {
 		const matcher = new Matcher(selector);
 		const remove: T['_id'][] = [];
 
@@ -293,7 +321,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return { queriesToRecompute, queryRemove, remove };
 	}
 
-	remove(selector: Selector<T>, callback?: (error: Error | null, result: number) => void) {
+	remove(selector: Filter<T>, callback?: (error: Error | null, result: number) => void) {
 		// Easy special case: if we're not calling observeChanges callbacks and
 		// we're not saving originals and we got asked to remove everything, then
 		// just empty everything directly.
@@ -334,7 +362,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return result;
 	}
 
-	async removeAsync(selector: Selector<T>, callback?: (error: Error | null, result: number) => void) {
+	async removeAsync(selector: Filter<T>, callback?: (error: Error | null, result: number) => void) {
 		// Easy special case: if we're not calling observeChanges callbacks and
 		// we're not saving originals and we got asked to remove everything, then
 		// just empty everything directly.
@@ -447,7 +475,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		this._savedOriginals = new IdMap<T['_id'], T>();
 	}
 
-	prepareUpdate(selector: Selector<T>) {
+	prepareUpdate(selector: Filter<T>) {
 		// Save the original results of any query that we might need to
 		// _recomputeResults on, because _modifyAndNotify will mutate the objects in
 		// it. (We don't need to save the original results of paused queries because
@@ -540,8 +568,8 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// XXX atomicity: if multi is true, and one modification fails, do
 	// we rollback the whole operation, or what?
 	async updateAsync(
-		selector: Selector<T>,
-		mod: unknown,
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
 		options:
 			| { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }
 			| null
@@ -577,7 +605,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		const qidToOriginalResults = this.prepareUpdate(selector);
 
-		let recomputeQids = {};
+		let recomputeQids: Record<string, boolean> = {};
 
 		let updateCount = 0;
 
@@ -634,8 +662,8 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// XXX atomicity: if multi is true, and one modification fails, do
 	// we rollback the whole operation, or what?
 	update(
-		selector: Selector<T>,
-		mod: unknown,
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
 		options:
 			| { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }
 			| null
@@ -679,7 +707,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		const qidToOriginalResults = this.prepareUpdate(selector);
 
-		let recomputeQids = {};
+		let recomputeQids: Record<string, boolean> = {};
 
 		let updateCount = 0;
 
@@ -736,8 +764,8 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// equivalent to LocalCollection.update(sel, mod, {upsert: true,
 	// _returnObject: true}).
 	upsert(
-		selector: Selector<T>,
-		mod: unknown,
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
 		options:
 			| { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }
 			| null
@@ -769,8 +797,8 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	upsertAsync(
-		selector: Selector<T>,
-		mod: unknown,
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
 		options:
 			| { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }
 			| null
@@ -805,7 +833,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// fn(doc, id) on each of them.  Specifically, if selector specifies
 	// specific _id's, it only looks at those.  doc is *not* cloned: it is the
 	// same object that is in _docs.
-	async _eachPossiblyMatchingDocAsync(selector: Selector<T>, fn: (doc: T, id: T['_id']) => Promise<boolean>) {
+	async _eachPossiblyMatchingDocAsync(selector: Filter<T>, fn: (doc: T, id: T['_id']) => Promise<boolean>) {
 		const specificIds = LocalCollection._idsMatchedBySelector(selector);
 
 		if (specificIds) {
@@ -822,7 +850,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 	}
 
-	_eachPossiblyMatchingDocSync(selector: Selector<T>, fn: (doc: T, id: T['_id']) => void | boolean) {
+	_eachPossiblyMatchingDocSync(selector: Filter<T>, fn: (doc: T, id: T['_id']) => void | boolean) {
 		const specificIds = LocalCollection._idsMatchedBySelector(selector);
 
 		if (specificIds) {
@@ -838,7 +866,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 	}
 
-	_getMatchedDocAndModify(doc: T, _mod: unknown, _arrayIndices: unknown) {
+	_getMatchedDocAndModify(doc: T) {
 		const matchedBefore: any = {};
 
 		Object.keys(this.queries).forEach((qid) => {
@@ -860,13 +888,13 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return matchedBefore;
 	}
 
-	_modifyAndNotifySync(doc: T, mod: unknown, arrayIndices: unknown) {
-		const matchedBefore = this._getMatchedDocAndModify(doc, mod, arrayIndices);
+	_modifyAndNotifySync(doc: T, mod: UpdateFilter<T>, arrayIndices: unknown) {
+		const matchedBefore = this._getMatchedDocAndModify(doc);
 
 		const oldDoc = EJSON.clone(doc);
 		LocalCollection._modify(doc, mod, { arrayIndices });
 
-		const recomputeQids: any = {};
+		const recomputeQids: Record<string, boolean> = {};
 
 		for (const qid of Object.keys(this.queries)) {
 			const query = this.queries[qid];
@@ -905,13 +933,13 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return recomputeQids;
 	}
 
-	async _modifyAndNotifyAsync(doc: T, mod: unknown, arrayIndices: unknown) {
-		const matchedBefore = this._getMatchedDocAndModify(doc, mod, arrayIndices);
+	async _modifyAndNotifyAsync(doc: T, mod: UpdateFilter<T>, arrayIndices: unknown) {
+		const matchedBefore = this._getMatchedDocAndModify(doc);
 
 		const oldDoc = EJSON.clone(doc);
 		LocalCollection._modify(doc, mod, { arrayIndices });
 
-		const recomputeQids: any = {};
+		const recomputeQids: Record<string, boolean> = {};
 		for (const qid of Object.keys(this.queries)) {
 			const query = this.queries[qid];
 
@@ -987,6 +1015,16 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		if (!this.paused) {
 			DiffSequence.diffQueryChanges(query.ordered, oldResults!, query.results, query, { projectionFn: query.projectionFn });
+		}
+	}
+
+	recomputeAllResults() {
+		this._docs.clear();
+		for (const record of this.store.getState().records) {
+			this._docs.set(record._id, { ...record });
+		}
+		for (const query of Object.values(this.queries)) {
+			this._recomputeResults(query);
 		}
 	}
 
@@ -1276,7 +1314,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	// Calculates the document to insert in case we're doing an upsert and the
 	// selector does not match any elements
-	static _createUpsertDocument<T>(selector: Selector<T>, modifier: any) {
+	static _createUpsertDocument<T>(selector: Filter<T>, modifier: any) {
 		const selectorDocument = populateDocumentWithQueryFields(selector);
 		const isModify = LocalCollection._isModificationMod(modifier);
 
@@ -1337,7 +1375,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// null. Note that the selector may have other restrictions so it may not even
 	// match those document!  We care about $in and $and since those are generated
 	// access-controlled update and remove.
-	static _idsMatchedBySelector<T>(selector: Selector<T>): any[] | null {
+	static _idsMatchedBySelector<T>(selector: Filter<T>): any[] | null {
 		// Is the selector just an ID?
 		if (LocalCollection._selectorIsId(selector)) {
 			return [selector];
@@ -2227,10 +2265,10 @@ const MODIFIERS = {
 
 		target[field] = arg;
 	},
-	$setOnInsert(_target: any, _field: any, _arg: any) {
+	$setOnInsert() {
 		// converted to `$set` in `_modify`
 	},
-	$unset(target: any, field: any, _arg: any) {
+	$unset(target: any, field: any) {
 		if (target !== undefined) {
 			if (target instanceof Array) {
 				if (field in target) {
@@ -2467,7 +2505,7 @@ const MODIFIERS = {
 
 		target[field] = toPull.filter((object) => !arg.some((element) => LocalCollection._f._equal(object, element)));
 	},
-	$bit(_target: any, field: any, _arg: any) {
+	$bit(_target: any, field: any) {
 		// XXX mongo only supports $bit on integers, and we only support
 		// native javascript numbers (doubles) so far, so we can't support $bit
 		throw createMinimongoError('$bit is not supported', { field });

@@ -1,7 +1,6 @@
 import { Mongo } from 'meteor/mongo';
 import { create } from 'zustand';
 
-import type { ILocalCollection } from './ILocalCollection';
 import { LocalCollection } from './LocalCollection';
 
 export type MinimongoSelector<T> = Mongo.Selector<T>;
@@ -14,67 +13,29 @@ interface IDocumentMapStore<T extends { _id: string }> {
 	find(predicate: (record: T) => boolean): T | undefined;
 	filter<U extends T>(predicate: (record: T) => record is U): U[];
 	filter(predicate: (record: T) => boolean): T[];
+	replaceAll(records: T[]): void;
 }
 
 export class MinimongoCollection<T extends { _id: string }> extends Mongo.Collection<T> {
-	readonly use = create<IDocumentMapStore<T>>()((_set, get) => ({
+	readonly use = create<IDocumentMapStore<T>>()((set, get) => ({
 		records: [],
 		get: (id: T['_id']) => get().records.find((record) => record._id === id),
 		find: (predicate: (record: T) => boolean) => get().records.find(predicate),
 		filter: (predicate: (record: T) => boolean) => get().records.filter(predicate),
+		replaceAll: (records: T[]) => {
+			set({ records: records.map<T>(Object.freeze) });
+			this._collection.recomputeAllResults();
+		},
 	}));
 
-	protected _collection: ILocalCollection<T> = new LocalCollection<T>();
+	protected _collection = new LocalCollection<T>(this.use);
 
 	constructor() {
 		super(null);
-
-		let internal = false;
-
-		this.find({}).observe({
-			added: (record) => {
-				internal = true;
-				this.use.setState((state) => ({ records: [...state.records, record] }));
-			},
-			changed: (record) => {
-				internal = true;
-				this.use.setState((state) => {
-					const records = [...state.records];
-					const index = records.findIndex((r) => r._id === record._id);
-					if (index !== -1) {
-						records[index] = { ...record };
-					}
-					return { records };
-				});
-			},
-			removed: (record) => {
-				internal = true;
-				this.use.setState((state) => ({
-					records: state.records.filter((r) => r._id !== record._id),
-				}));
-			},
-		});
-
-		this.use.subscribe((state) => {
-			if (internal) {
-				internal = false;
-				return;
-			}
-			this._collection._docs.clear();
-			for (const record of state.records) {
-				this._collection._docs.set(record._id, record);
-			}
-		});
 	}
 
 	get state() {
 		return this.use.getState();
-	}
-
-	recomputeQueries() {
-		for (const query of Object.values(this._collection.queries)) {
-			this._collection._recomputeResults(query);
-		}
 	}
 
 	async bulkMutate(fn: () => Promise<void>) {
@@ -84,7 +45,6 @@ export class MinimongoCollection<T extends { _id: string }> extends Mongo.Collec
 	}
 
 	replaceAll(records: T[]) {
-		this.use.setState({ records });
-		this.recomputeQueries();
+		this.state.replaceAll(records);
 	}
 }

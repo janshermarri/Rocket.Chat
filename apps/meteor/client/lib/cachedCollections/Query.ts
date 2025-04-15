@@ -1,5 +1,5 @@
 import type { Cursor, Options } from './Cursor';
-import type { IIdMap } from './IdMap';
+import type { IIdMap } from './IIdMap';
 import type { Matcher } from './Matcher';
 import type { Sorter } from './Sorter';
 

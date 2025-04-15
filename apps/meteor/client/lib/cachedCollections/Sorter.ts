@@ -1,5 +1,6 @@
-import type { SortSpecifier } from './Cursor';
-import type { IIdMap } from './IdMap';
+import type { Sort } from 'mongodb';
+
+import type { IIdMap } from './IIdMap';
 import { LocalCollection } from './LocalCollection';
 import { Matcher } from './Matcher';
 import { expandArraysInBranches, hasOwn, makeLookupFunction } from './common';
@@ -39,7 +40,7 @@ export class Sorter<T extends { _id: string }> {
 
 	affectedByModifier: boolean;
 
-	constructor(spec: SortSpecifier) {
+	constructor(spec: Sort) {
 		this._sortSpecParts = [];
 		this._sortFunction = null;
 
