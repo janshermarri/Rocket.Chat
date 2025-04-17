@@ -1,11 +1,12 @@
 import { EJSON } from 'meteor/ejson';
 import { Meteor } from 'meteor/meteor';
-import type { Filter, Hint, Sort } from 'mongodb';
+import type { Filter } from 'mongodb';
 
 import type { IIdMap } from './IIdMap';
 import { IdMap } from './IdMap';
 import { LocalCollection } from './LocalCollection';
 import { Matcher } from './Matcher';
+import type { FieldSpecifier, Options } from './MinimongoCollection';
 import type { ObserveCallbacks } from './ObserveCallbacks';
 import type { ObserveChangesCallbacks } from './ObserveChangesCallbacks';
 import { ObserveHandle } from './ObserveHandle';
@@ -13,39 +14,11 @@ import type { Query } from './Query';
 import { Sorter } from './Sorter';
 import { hasOwn } from './common';
 
-type FieldSpecifier = {
-	[id: string]: number | boolean;
-};
-
-type Transform<T> = ((doc: T) => any) | null | undefined;
-
 export type DispatchTransform<TTransform, T, TProjection> = TTransform extends (...args: any) => any
 	? ReturnType<TTransform>
 	: TTransform extends null
 		? T
 		: TProjection;
-
-export type Options<T> = {
-	/** Sort order (default: natural order) */
-	sort?: Sort | undefined;
-	/** Number of results to skip at the beginning */
-	skip?: number | undefined;
-	/** Maximum number of results to return */
-	limit?: number | undefined;
-	/**
-	 * Dictionary of fields to return or exclude.
-	 * @deprecated use projection instead
-	 */
-	fields?: FieldSpecifier | undefined;
-	/** Dictionary of fields to return or exclude. */
-	projection?: FieldSpecifier | undefined;
-	/** (Server only) Overrides MongoDB's default index selection and query optimization process. Specify an index to force its use, either by its name or index specification. */
-	hint?: Hint | undefined;
-	/** (Client only) Default `true`; pass `false` to disable reactivity */
-	reactive?: boolean | undefined;
-	/**  Overrides `transform` on the  [`Collection`](#collections) for this cursor.  Pass `null` to disable transformation. */
-	transform?: Transform<T> | undefined;
-};
 
 // Cursor: a specification for a particular subset of documents, w/ a defined
 // order, limit, and offset.  creating a Cursor with LocalCollection.find(),
@@ -71,14 +44,14 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	reactive: boolean | undefined;
 
 	// don't call this ctor directly.  use LocalCollection.find().
-	constructor(collection: LocalCollection<T>, selector: Filter<T>, options?: TOptions) {
+	constructor(collection: LocalCollection<T>, selector: Filter<T> | T['_id'], options?: TOptions) {
 		this.collection = collection;
 		this.sorter = null;
 		this.matcher = new Matcher(selector);
 
-		if (LocalCollection._selectorIsIdPerhapsAsObject(selector)) {
+		if (LocalCollection._selectorIsIdPerhapsAsObject<T>(selector)) {
 			// stash for fast _id and { _id }
-			this._selectorId = hasOwn.call(selector, '_id') ? (selector._id as any) : selector;
+			this._selectorId = hasOwn.call(selector, '_id') ? (selector as { _id?: string })._id : selector;
 		} else {
 			this._selectorId = undefined;
 
@@ -451,16 +424,10 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 		// run the observe callbacks resulting from the initial contents
 		// before we leave the observe.
-		const drainResult = this.collection._observeQueue.drain();
+		this.collection._observeQueue.drain();
 
-		if (drainResult instanceof Promise) {
-			handle.isReadyPromise = drainResult;
-			// eslint-disable-next-line no-return-assign
-			drainResult.then(() => (handle.isReady = true));
-		} else {
-			handle.isReady = true;
-			handle.isReadyPromise = Promise.resolve();
-		}
+		handle.isReady = true;
+		handle.isReadyPromise = Promise.resolve();
 
 		return handle;
 	}

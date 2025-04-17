@@ -3,18 +3,19 @@ import { Meteor } from 'meteor/meteor';
 import type { CountDocumentsOptions, Filter, UpdateFilter } from 'mongodb';
 import type { StoreApi, UseBoundStore } from 'zustand';
 
-import type { Options } from './Cursor';
 import { Cursor } from './Cursor';
 import { DiffSequence } from './DiffSequence';
 import type { IIdMap } from './IIdMap';
 import type { ILocalCollection } from './ILocalCollection';
 import { IdMap } from './IdMap';
 import { Matcher } from './Matcher';
+import type { Options } from './MinimongoCollection';
 import type { ObserveCallbacks } from './ObserveCallbacks';
 import type { ObserveChangesCallbacks } from './ObserveChangesCallbacks';
 import { OrderedDict } from './OrderedDict';
 import type { Query } from './Query';
 import { Sorter } from './Sorter';
+import { SynchronousQueue } from './SynchronousQueue';
 import {
 	hasOwn,
 	isIndexable,
@@ -32,9 +33,9 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// _id -> document (also containing id)
 	readonly _docs: IIdMap<T['_id'], T> = new IdMap<T['_id'], T>();
 
-	readonly _observeQueue = new Meteor._SynchronousQueue();
+	readonly _observeQueue = new SynchronousQueue();
 
-	private next_qid = 1; // live query id generator
+	next_qid = 1; // live query id generator
 
 	// qid -> live query object. keys:
 	//  ordered: bool. ordered queries have addedBefore/movedBefore callbacks.
@@ -104,11 +105,11 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// XXX sort does not yet support subkeys ('a.b') .. fix that!
 	// XXX add one more sort form: "key"
 	// XXX tests
-	find(selector: Filter<T> = {}, options?: Options<T>) {
+	find(selector: Filter<T> | T['_id'] = {}, options?: Options<T>) {
 		return new Cursor(this, selector, options);
 	}
 
-	findOne(selector?: Filter<T>, options: Options<T> = {}) {
+	findOne(selector?: Filter<T> | T['_id'], options: Options<T> = {}) {
 		// NOTE: by setting limit 1 here, we end up using very inefficient
 		// code that recomputes the whole query on each update. The upside is
 		// that when you reactively depend on a findOne you only get
@@ -122,7 +123,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return this.find(selector, options).fetch()[0];
 	}
 
-	async findOneAsync(selector: Filter<T> = {}, options: Options<T> = {}) {
+	async findOneAsync(selector: Filter<T> | T['_id'] = {}, options: Options<T> = {}) {
 		options.limit = 1;
 		return (await this.find(selector, options).fetchAsync())[0];
 	}
@@ -1804,7 +1805,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	// Is the selector just lookup by _id (shorthand or not)?
-	static _selectorIsIdPerhapsAsObject(selector: unknown): selector is string | number | { _id: string } {
+	static _selectorIsIdPerhapsAsObject<T extends { _id: string }>(selector: unknown): selector is T['_id'] | Pick<T, '_id'> {
 		return (
 			LocalCollection._selectorIsId(selector) ||
 			(LocalCollection._selectorIsId(selector && (selector as { _id?: string })._id) && Object.keys(selector as object).length === 1)

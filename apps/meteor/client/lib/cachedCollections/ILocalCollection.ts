@@ -1,24 +1,26 @@
 import type { CountDocumentsOptions, Filter, UpdateFilter } from 'mongodb';
 
-import type { Cursor, Options, DispatchTransform } from './Cursor';
+import type { Cursor, DispatchTransform } from './Cursor';
 import type { IIdMap } from './IIdMap';
+import type { Options } from './MinimongoCollection';
 import type { Query } from './Query';
 
 export interface ILocalCollection<T extends { _id: string }> {
-	_docs: IIdMap<T['_id'], T>;
-	_recomputeResults(query: Query<T, Options<T>, any>, snapshot?: IIdMap<T['_id'], T> | T[]): void;
-	// next_qid: number;
+	next_qid: number;
 	queries: Record<string, Query<T, Options<T>, any>>;
 	paused: boolean;
 	countDocuments(selector?: Filter<T>, options?: CountDocumentsOptions): Promise<number>;
 	estimatedDocumentCount(options: CountDocumentsOptions): Promise<number>;
-	find(selector?: Filter<T>): Cursor<T, Options<T>, T>;
-	find<O extends Options<T>>(selector?: Filter<T>, options?: O): Cursor<T, O, DispatchTransform<O['transform'], T, T>>;
-	findOne(selector?: Filter<T>): T | undefined;
-	findOne<O extends Omit<Options<T>, 'limit'>>(selector?: Filter<T>, options?: O): DispatchTransform<O['transform'], T, T> | undefined;
-	findOneAsync(selector?: Filter<T>): Promise<T | undefined>;
+	find(selector?: Filter<T> | T['_id']): Cursor<T, Options<T>, T>;
+	find<O extends Options<T>>(selector?: Filter<T> | T['_id'], options?: O): Cursor<T, O, DispatchTransform<O['transform'], T, T>>;
+	findOne(selector?: Filter<T> | T['_id']): T | undefined;
+	findOne<O extends Omit<Options<T>, 'limit'>>(
+		selector?: Filter<T> | T['_id'],
+		options?: O,
+	): DispatchTransform<O['transform'], T, T> | undefined;
+	findOneAsync(selector?: Filter<T> | T['_id']): Promise<T | undefined>;
 	findOneAsync<O extends Omit<Options<T>, 'limit'>>(
-		selector?: Filter<T>,
+		selector?: Filter<T> | T['_id'],
 		options?: O,
 	): Promise<DispatchTransform<O['transform'], T, T> | undefined>;
 	prepareInsert(doc: T): string;

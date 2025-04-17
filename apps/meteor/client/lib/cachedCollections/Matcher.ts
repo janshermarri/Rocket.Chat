@@ -1,4 +1,5 @@
 import { EJSON } from 'meteor/ejson';
+import type { Filter } from 'mongodb';
 
 import { LocalCollection } from './LocalCollection';
 import { compileDocumentSelector, hasOwn, nothingMatcher } from './common';
@@ -40,7 +41,7 @@ export class Matcher<T extends { _id: string }> {
 
 	_isUpdate: boolean;
 
-	constructor(selector: object | ((doc: T) => boolean), isUpdate = false) {
+	constructor(selector: Filter<T> | T['_id'] | ((doc: T) => boolean), isUpdate = false) {
 		// A set (object mapping string -> *) of all of the document paths looked
 		// at by the selector. Also includes the empty string if it may look at any
 		// path (eg, $where).

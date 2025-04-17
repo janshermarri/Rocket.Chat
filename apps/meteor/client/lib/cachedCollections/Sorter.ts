@@ -1,4 +1,4 @@
-import type { Sort } from 'mongodb';
+import type { Filter, Sort } from 'mongodb';
 
 import type { IIdMap } from './IIdMap';
 import { LocalCollection } from './LocalCollection';
@@ -88,10 +88,10 @@ export class Sorter<T extends { _id: string }> {
 		// same modifiers as this sort order. This is only implemented on the
 		// server.
 		if (this.affectedByModifier) {
-			const selector: Record<string, number> = {};
+			const selector: Filter<T> = {};
 
 			this._sortSpecParts.forEach((spec) => {
-				selector[spec.path] = 1;
+				selector[spec.path as keyof Filter<T>] = 1;
 			});
 
 			this._selectorForAffectedByModifier = new Matcher(selector);
