@@ -1,9 +1,8 @@
 import type { Filter, Sort } from 'mongodb';
 
 import type { IIdMap } from './IIdMap';
-import { LocalCollection } from './LocalCollection';
 import { Matcher } from './Matcher';
-import { expandArraysInBranches, hasOwn, makeLookupFunction } from './common';
+import { _f, expandArraysInBranches, hasOwn, makeLookupFunction } from './common';
 
 // Give a sort spec, which can be in any of these forms:
 //   {"key1": 1, "key2": -1}
@@ -307,7 +306,7 @@ export class Sorter<T extends { _id: string }> {
 		const invert = !this._sortSpecParts[i].ascending;
 
 		return (key1, key2) => {
-			const compare = LocalCollection._f._cmp(key1[i], key2[i]);
+			const compare = _f._cmp(key1[i], key2[i]);
 			return invert ? -compare : compare;
 		};
 	}

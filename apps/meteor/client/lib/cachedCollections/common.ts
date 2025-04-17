@@ -1,3 +1,5 @@
+import { EJSON } from 'meteor/ejson';
+
 import { LocalCollection } from './LocalCollection';
 import type { Matcher } from './Matcher';
 
@@ -120,7 +122,7 @@ const ELEMENT_OPERATORS = {
 				throw Error('argument to $type is not a number or a string');
 			}
 
-			return (value: any) => value !== undefined && LocalCollection._f._type(value) === operand;
+			return (value: any) => value !== undefined && _f._type(value) === operand;
 		},
 	},
 	$bitsAllSet: {
@@ -672,7 +674,7 @@ function equalityElementMatcher(elementSelector: any) {
 		return (value: any) => value == null;
 	}
 
-	return (value: any) => LocalCollection._f._equal(elementSelector, value);
+	return (value: any) => _f._equal(elementSelector, value);
 }
 
 function everythingMatcher(_docOrBranchedValues: any) {
@@ -863,7 +865,7 @@ function makeInequality(cmpValueComparator: any) {
 				operand = null;
 			}
 
-			const operandType = LocalCollection._f._type(operand);
+			const operandType = _f._type(operand);
 
 			return (value: any) => {
 				if (value === undefined) {
@@ -872,11 +874,11 @@ function makeInequality(cmpValueComparator: any) {
 
 				// Comparisons are never true among things of different type (except
 				// null vs undefined).
-				if (LocalCollection._f._type(value) !== operandType) {
+				if (_f._type(value) !== operandType) {
 					return false;
 				}
 
-				return cmpValueComparator(LocalCollection._f._cmp(value, operand));
+				return cmpValueComparator(_f._cmp(value, operand));
 			};
 		},
 	};
@@ -1340,3 +1342,237 @@ function validateObject(object: Record<string, unknown>, path: string) {
 		});
 	}
 }
+
+// helpers used by compiled selector code
+export const _f = {
+	// XXX for _all and _in, consider building 'inquery' at compile time..
+	_type(v: any) {
+		if (typeof v === 'number') {
+			return 1;
+		}
+
+		if (typeof v === 'string') {
+			return 2;
+		}
+
+		if (typeof v === 'boolean') {
+			return 8;
+		}
+
+		if (Array.isArray(v)) {
+			return 4;
+		}
+
+		if (v === null) {
+			return 10;
+		}
+
+		// note that typeof(/x/) === "object"
+		if (v instanceof RegExp) {
+			return 11;
+		}
+
+		if (typeof v === 'function') {
+			return 13;
+		}
+
+		if (v instanceof Date) {
+			return 9;
+		}
+
+		if (EJSON.isBinary(v)) {
+			return 5;
+		}
+
+		// object
+		return 3;
+
+		// XXX support some/all of these:
+		// 14, symbol
+		// 15, javascript code with scope
+		// 16, 18: 32-bit/64-bit integer
+		// 17, timestamp
+		// 255, minkey
+		// 127, maxkey
+	},
+
+	// deep equality test: use for literal document and array matches
+	_equal(a: any, b: any) {
+		return EJSON.equals(a, b, { keyOrderSensitive: true });
+	},
+
+	// maps a type code to a value that can be used to sort values of different
+	// types
+	_typeorder(t: number) {
+		// http://www.mongodb.org/display/DOCS/What+is+the+Compare+Order+for+BSON+Types
+		// XXX what is the correct sort position for Javascript code?
+		// ('100' in the matrix below)
+		// XXX minkey/maxkey
+		return [
+			-1, // (not a type)
+			1, // number
+			2, // string
+			3, // object
+			4, // array
+			5, // binary
+			-1, // deprecated
+			6, // ObjectID
+			7, // bool
+			8, // Date
+			0, // null
+			9, // RegExp
+			-1, // deprecated
+			100, // JS code
+			2, // deprecated (symbol)
+			100, // JS code
+			1, // 32-bit int
+			8, // Mongo timestamp
+			1, // 64-bit int
+		][t];
+	},
+
+	// compare two values of unknown type according to BSON ordering
+	// semantics. (as an extension, consider 'undefined' to be less than
+	// any other value.) return negative if a is less, positive if b is
+	// less, or 0 if equal
+	// eslint-disable-next-line complexity
+	_cmp(a: unknown, b: unknown): number {
+		if (a === undefined) {
+			return b === undefined ? 0 : -1;
+		}
+
+		if (b === undefined) {
+			return 1;
+		}
+
+		let ta = _f._type(a);
+		let tb = _f._type(b);
+
+		const oa = _f._typeorder(ta);
+		const ob = _f._typeorder(tb);
+
+		if (oa !== ob) {
+			return oa < ob ? -1 : 1;
+		}
+
+		// XXX need to implement this if we implement Symbol or integers, or
+		// Timestamp
+		if (ta !== tb) {
+			throw Error('Missing type coercion logic in _cmp');
+		}
+
+		if (ta === 7) {
+			// ObjectID
+			// Convert to string.
+			// eslint-disable-next-line no-multi-assign
+			ta = tb = 2;
+			a = (a as { toHexString(): string }).toHexString();
+			b = (b as { toHexString(): string }).toHexString();
+		}
+
+		if (ta === 9) {
+			// Date
+			// Convert to millis.
+			// eslint-disable-next-line no-multi-assign
+			ta = tb = 1;
+			a = isNaN(a as number) ? 0 : (a as Date).getTime();
+			b = isNaN(b as number) ? 0 : (b as Date).getTime();
+		}
+
+		if (ta === 1) {
+			// double
+			return (a as number) - (b as number);
+		}
+
+		if (tb === 2)
+			// string
+			// eslint-disable-next-line no-nested-ternary
+			return (a as string) < (b as string) ? -1 : a === b ? 0 : 1;
+
+		if (ta === 3) {
+			// Object
+			// this could be much more efficient in the expected case ...
+			const toArray = (object: any) => {
+				const result: any[] = [];
+
+				Object.keys(object).forEach((key) => {
+					result.push(key, object[key]);
+				});
+
+				return result;
+			};
+
+			return _f._cmp(toArray(a), toArray(b));
+		}
+
+		if (ta === 4) {
+			// Array
+			for (let i = 0; ; i++) {
+				if (i === (a as unknown[]).length) {
+					return i === (b as unknown[]).length ? 0 : -1;
+				}
+
+				if (i === (b as unknown[]).length) {
+					return 1;
+				}
+
+				const s = _f._cmp((a as unknown[])[i], (b as unknown[])[i]);
+				if (s !== 0) {
+					return s;
+				}
+			}
+		}
+
+		if (ta === 5) {
+			// binary
+			// Surprisingly, a small binary blob is always less than a large one in
+			// Mongo.
+			if ((a as Uint8Array).length !== (b as Uint8Array).length) {
+				return (a as Uint8Array).length - (b as Uint8Array).length;
+			}
+
+			for (let i = 0; i < (a as Uint8Array).length; i++) {
+				if ((a as Uint8Array)[i] < (b as Uint8Array)[i]) {
+					return -1;
+				}
+
+				if ((a as Uint8Array)[i] > (b as Uint8Array)[i]) {
+					return 1;
+				}
+			}
+
+			return 0;
+		}
+
+		if (ta === 8) {
+			// boolean
+			if (a) {
+				return b ? 0 : 1;
+			}
+
+			return b ? -1 : 0;
+		}
+
+		if (ta === 10)
+			// null
+			return 0;
+
+		if (ta === 11)
+			// regexp
+			throw Error('Sorting not supported on regular expression'); // XXX
+
+		// 13: javascript code
+		// 14: symbol
+		// 15: javascript code with scope
+		// 16: 32-bit integer
+		// 17: timestamp
+		// 18: 64-bit integer
+		// 255: minkey
+		// 127: maxkey
+		if (ta === 13)
+			// javascript code
+			throw Error('Sorting not supported on Javascript code'); // XXX
+
+		throw Error('Unknown type to sort');
+	},
+};

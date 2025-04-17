@@ -6,7 +6,7 @@ import type { IIdMap } from './IIdMap';
 import { IdMap } from './IdMap';
 import { LocalCollection } from './LocalCollection';
 import { Matcher } from './Matcher';
-import type { FieldSpecifier, Options } from './MinimongoCollection';
+import type { FieldSpecifier, Options, Transform } from './MinimongoCollection';
 import type { ObserveCallbacks } from './ObserveCallbacks';
 import type { ObserveChangesCallbacks } from './ObserveChangesCallbacks';
 import { ObserveHandle } from './ObserveHandle';
@@ -29,7 +29,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 	matcher: Matcher<T>;
 
-	protected _selectorId: T['_id'] | undefined;
+	private _selectorId: T['_id'] | undefined;
 
 	skip: number;
 
@@ -37,9 +37,9 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 	fields: FieldSpecifier | undefined;
 
-	protected _projectionFn: (doc: Omit<T, '_id'>) => TProjection;
+	private _projectionFn: (doc: Partial<T>) => TProjection;
 
-	protected _transform: TOptions['transform'];
+	private _transform: TOptions['transform'];
 
 	reactive: boolean | undefined;
 
@@ -66,12 +66,64 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 		this._projectionFn = LocalCollection._compileProjection(this.fields || {});
 
-		this._transform = LocalCollection.wrapTransform(options?.transform);
+		this._transform = this.wrapTransform(options?.transform);
 
 		// by default, queries register w/ Tracker when it is available.
 		if (typeof Tracker !== 'undefined') {
 			this.reactive = options?.reactive === undefined ? true : options.reactive;
 		}
+	}
+
+	// Wrap a transform function to return objects that have the _id field
+	// of the untransformed document. This ensures that subsystems such as
+	// the observe-sequence package that call `observe` can keep track of
+	// the documents identities.
+	//
+	// - Require that it returns objects
+	// - If the return value has an _id field, verify that it matches the
+	//   original _id field
+	// - If the return value doesn't have an _id field, add it back.
+	private wrapTransform(transform: (Transform<T> & { __wrappedTransform__?: boolean }) | null | undefined) {
+		if (!transform) {
+			return null;
+		}
+
+		// No need to doubly-wrap transforms.
+		if (transform.__wrappedTransform__) {
+			return transform;
+		}
+
+		const wrapped = (doc: any) => {
+			if (!hasOwn.call(doc, '_id')) {
+				// XXX do we ever have a transform on the oplog's collection? because that
+				// collection has no _id.
+				throw new Error('can only transform documents with _id');
+			}
+
+			const id = doc._id;
+
+			// XXX consider making tracker a weak dependency and checking
+			// Package.tracker here
+			const transformed = Tracker.nonreactive(() => transform(doc));
+
+			if (!LocalCollection._isPlainObject(transformed)) {
+				throw new Error('transform must return object');
+			}
+
+			if (hasOwn.call(transformed, '_id')) {
+				if (!EJSON.equals(transformed._id, id)) {
+					throw new Error("transformed document can't have different _id");
+				}
+			} else {
+				transformed._id = id;
+			}
+
+			return transformed;
+		};
+
+		wrapped.__wrappedTransform__ = true;
+
+		return wrapped;
 	}
 
 	/**
@@ -378,7 +430,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 		if (!options._suppress_initial && !this.collection.paused) {
 			const handler = (doc: T) => {
-				const fields: Omit<T, '_id'> & { _id?: string } = EJSON.clone(doc);
+				const fields: Partial<T> & { _id?: string } = EJSON.clone(doc);
 
 				delete fields._id;
 
@@ -472,10 +524,6 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 			// observeChanges will stop() when this computation is invalidated
 			this.observeChanges(options);
 		}
-	}
-
-	_getCollectionName() {
-		return null;
 	}
 
 	// Returns a collection of matching objects, but doesn't deep copy them.

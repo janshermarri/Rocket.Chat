@@ -13,7 +13,7 @@ import type { Options } from './MinimongoCollection';
 import type { ObserveCallbacks } from './ObserveCallbacks';
 import type { ObserveChangesCallbacks } from './ObserveChangesCallbacks';
 import { OrderedDict } from './OrderedDict';
-import type { Query } from './Query';
+import type { OrderedQuery, Query, UnorderedQuery } from './Query';
 import { Sorter } from './Sorter';
 import { SynchronousQueue } from './SynchronousQueue';
 import {
@@ -24,6 +24,7 @@ import {
 	createMinimongoError,
 	populateDocumentWithQueryFields,
 	projectionDetails,
+	_f,
 } from './common';
 
 // XXX type checking on selectors (graceful error if malformed)
@@ -174,7 +175,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				if (query.cursor.skip || query.cursor.limit) {
 					queriesToRecompute.push(qid);
 				} else {
-					LocalCollection._insertInResultsSync(query, doc);
+					this._insertInResultsSync(query, doc);
 				}
 			}
 		}
@@ -487,7 +488,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// We should only clone each document once, even if it appears in multiple
 		// queries
 		const docMap = new IdMap<T['_id'], T>();
-		const idsMatched = LocalCollection._idsMatchedBySelector(selector);
+		const idsMatched = this._idsMatchedBySelector(selector);
 
 		Object.keys(this.queries).forEach((qid) => {
 			const query = this.queries[qid];
@@ -516,7 +517,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 						return docMap.get(doc._id)!;
 					}
 
-					const docToMemoize = idsMatched && !idsMatched.some((id) => EJSON.equals(id, doc._id as any)) ? doc : EJSON.clone(doc);
+					const docToMemoize = idsMatched && !idsMatched.some((id) => id === doc._id) ? doc : EJSON.clone(doc);
 
 					docMap.set(doc._id, docToMemoize);
 
@@ -643,7 +644,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// generate an id for it.
 		let insertedId;
 		if (updateCount === 0 && (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).upsert) {
-			const doc = LocalCollection._createUpsertDocument(selector, mod);
+			const doc = this._createUpsertDocument(selector, mod);
 			if (!doc._id && (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).insertedId) {
 				doc._id = (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).insertedId;
 			}
@@ -743,7 +744,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// it's time to do an insert. Figure out what document we are inserting, and
 		// generate an id for it.
 		if (updateCount === 0 && (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).upsert) {
-			const doc = LocalCollection._createUpsertDocument(selector, mod);
+			const doc = this._createUpsertDocument(selector, mod);
 			if (!doc._id && (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).insertedId) {
 				doc._id = (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).insertedId;
 			}
@@ -835,7 +836,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// specific _id's, it only looks at those.  doc is *not* cloned: it is the
 	// same object that is in _docs.
 	async _eachPossiblyMatchingDocAsync(selector: Filter<T>, fn: (doc: T, id: T['_id']) => Promise<boolean>) {
-		const specificIds = LocalCollection._idsMatchedBySelector(selector);
+		const specificIds = this._idsMatchedBySelector(selector);
 
 		if (specificIds) {
 			for (const id of specificIds) {
@@ -852,7 +853,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	_eachPossiblyMatchingDocSync(selector: Filter<T>, fn: (doc: T, id: T['_id']) => void | boolean) {
-		const specificIds = LocalCollection._idsMatchedBySelector(selector);
+		const specificIds = this._idsMatchedBySelector(selector);
 
 		if (specificIds) {
 			for (const id of specificIds) {
@@ -926,7 +927,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			} else if (before && !after) {
 				LocalCollection._removeFromResultsSync(query, doc);
 			} else if (!before && after) {
-				LocalCollection._insertInResultsSync(query, doc);
+				this._insertInResultsSync(query, doc);
 			} else if (before && after) {
 				LocalCollection._updateInResultsSync(query, doc, oldDoc);
 			}
@@ -1153,58 +1154,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 	};
 
-	// Wrap a transform function to return objects that have the _id field
-	// of the untransformed document. This ensures that subsystems such as
-	// the observe-sequence package that call `observe` can keep track of
-	// the documents identities.
-	//
-	// - Require that it returns objects
-	// - If the return value has an _id field, verify that it matches the
-	//   original _id field
-	// - If the return value doesn't have an _id field, add it back.
-	static wrapTransform(transform: any) {
-		if (!transform) {
-			return null;
-		}
-
-		// No need to doubly-wrap transforms.
-		if (transform.__wrappedTransform__) {
-			return transform;
-		}
-
-		const wrapped = (doc: any) => {
-			if (!hasOwn.call(doc, '_id')) {
-				// XXX do we ever have a transform on the oplog's collection? because that
-				// collection has no _id.
-				throw new Error('can only transform documents with _id');
-			}
-
-			const id = doc._id;
-
-			// XXX consider making tracker a weak dependency and checking
-			// Package.tracker here
-			const transformed = Tracker.nonreactive(() => transform(doc));
-
-			if (!LocalCollection._isPlainObject(transformed)) {
-				throw new Error('transform must return object');
-			}
-
-			if (hasOwn.call(transformed, '_id')) {
-				if (!EJSON.equals(transformed._id, id)) {
-					throw new Error("transformed document can't have different _id");
-				}
-			} else {
-				transformed._id = id;
-			}
-
-			return transformed;
-		};
-
-		wrapped.__wrappedTransform__ = true;
-
-		return wrapped;
-	}
-
 	// XXX the sorted-query logic below is laughably inefficient. we'll
 	// need to come up with a better datastructure for this.
 	//
@@ -1315,7 +1264,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	// Calculates the document to insert in case we're doing an upsert and the
 	// selector does not match any elements
-	static _createUpsertDocument<T>(selector: Filter<T>, modifier: any) {
+	private _createUpsertDocument(selector: Filter<T>, modifier: UpdateFilter<T>) {
 		const selectorDocument = populateDocumentWithQueryFields(selector);
 		const isModify = LocalCollection._isModificationMod(modifier);
 
@@ -1345,18 +1294,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return replacement;
 	}
 
-	static _diffObjects = DiffSequence.diffObjects;
-
-	// ordered: bool.
-	// old_results and new_results: collections of documents.
-	//    if ordered, they are arrays.
-	//    if unordered, they are IdMaps
-	static _diffQueryChanges = DiffSequence.diffQueryChanges;
-
-	static _diffQueryOrderedChanges = DiffSequence.diffQueryOrderedChanges;
-
-	static _diffQueryUnorderedChanges = DiffSequence.diffQueryUnorderedChanges;
-
 	static _findInOrderedResults(query: any, doc: any): number {
 		if (!query.ordered) {
 			throw new Error("Can't call _findInOrderedResults on unordered query");
@@ -1368,7 +1305,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			}
 		}
 
-		throw Error('object missing from query');
+		throw new Error('object missing from query');
 	}
 
 	// If this is a selector which explicitly constrains the match by ID to a finite
@@ -1376,7 +1313,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// null. Note that the selector may have other restrictions so it may not even
 	// match those document!  We care about $in and $and since those are generated
 	// access-controlled update and remove.
-	static _idsMatchedBySelector<T>(selector: Filter<T>): any[] | null {
+	private _idsMatchedBySelector(selector: Filter<T> | T['_id']): T['_id'][] | null {
 		// Is the selector just an ID?
 		if (LocalCollection._selectorIsId(selector)) {
 			return [selector];
@@ -1411,7 +1348,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// constraint. (Well, by their intersection, but that seems unlikely.)
 		if (Array.isArray(selector.$and)) {
 			for (let i = 0; i < selector.$and.length; ++i) {
-				const subIds = LocalCollection._idsMatchedBySelector(selector.$and[i]);
+				const subIds = this._idsMatchedBySelector(selector.$and[i] as Filter<T> | T['_id']);
 
 				if (subIds) {
 					return subIds;
@@ -1422,32 +1359,41 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return null;
 	}
 
-	static _insertInResultsSync(query: any, doc: any) {
-		const fields = EJSON.clone(doc);
+	private _insertInResultsSync(query: Query<T, Options<T>, T>, doc: T) {
+		const fields: Partial<T> = EJSON.clone(doc);
 
 		delete fields._id;
 
 		if (query.ordered) {
-			if (!query.sorter) {
-				query.addedBefore(doc._id, query.projectionFn(fields), null);
-				query.results.push(doc);
+			if (!(query as OrderedQuery<T, Options<T>, T>).sorter) {
+				(query as OrderedQuery<T, Options<T>, T>).addedBefore(
+					doc._id,
+					(query as OrderedQuery<T, Options<T>, T>).projectionFn(fields),
+					null,
+				);
+				(query as OrderedQuery<T, Options<T>, T>).results.push(doc);
 			} else {
-				const i = LocalCollection._insertInSortedList(query.sorter.getComparator({ distances: query.distances }), query.results, doc);
+				const i = LocalCollection._insertInSortedList(
+					(query as OrderedQuery<T, Options<T>, T>).sorter.getComparator({
+						distances: (query as OrderedQuery<T, Options<T>, T>).distances,
+					}),
+					(query as OrderedQuery<T, Options<T>, T>).results,
+					doc,
+				);
 
-				let next = query.results[i + 1];
-				if (next) {
-					next = next._id;
-				} else {
-					next = null;
-				}
+				const next = (query as OrderedQuery<T, Options<T>, T>).results[i + 1]?._id ?? null;
 
-				query.addedBefore(doc._id, query.projectionFn(fields), next);
+				(query as OrderedQuery<T, Options<T>, T>).addedBefore(
+					doc._id,
+					(query as OrderedQuery<T, Options<T>, T>).projectionFn(fields),
+					next,
+				);
 			}
 
-			query.added(doc._id, query.projectionFn(fields));
+			(query as OrderedQuery<T, Options<T>, T>).added(doc._id, query.projectionFn(fields));
 		} else {
-			query.added(doc._id, query.projectionFn(fields));
-			query.results.set(doc._id, doc);
+			(query as UnorderedQuery<T, Options<T>, T>).added(doc._id, (query as UnorderedQuery<T, Options<T>, T>).projectionFn(fields));
+			(query as UnorderedQuery<T, Options<T>, T>).results.set(doc._id, doc);
 		}
 	}
 
@@ -1516,7 +1462,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// RegExp
 	// XXX note that _type(undefined) === 3!!!!
 	static _isPlainObject(x: any): x is Record<string, any> {
-		return x && LocalCollection._f._type(x) === 3;
+		return x && _f._type(x) === 3;
 	}
 
 	// XXX need a strategy for passing the binding of $ into this
@@ -1577,7 +1523,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				});
 			});
 
-			if (doc._id && !EJSON.equals(doc._id as any, newDoc._id as any)) {
+			if (doc._id && doc._id !== newDoc._id) {
 				throw createMinimongoError(
 					`After applying the update to the document {_id: "${doc._id}", ...},` +
 						" the (immutable) field '_id' was found to have been altered to " +
@@ -1585,7 +1531,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				);
 			}
 		} else {
-			if (doc._id && modifier._id && !EJSON.equals(doc._id as any, modifier._id)) {
+			if (doc._id && modifier._id && doc._id !== modifier._id) {
 				throw createMinimongoError(`The _id field cannot be changed from {_id: "${doc._id}"} to {_id: "${modifier._id}"}`);
 			}
 
@@ -1813,7 +1759,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	static _updateInResultsSync = (query: any, doc: any, oldDoc: any) => {
-		if (!EJSON.equals(doc._id, oldDoc._id)) {
+		if (doc._id !== oldDoc._id) {
 			throw new Error("Can't change a doc's _id while updating");
 		}
 
@@ -1856,8 +1802,8 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 	};
 
-	static _updateInResultsAsync = async (query: any, doc: any, oldDoc: any) => {
-		if (!EJSON.equals(doc._id, oldDoc._id)) {
+	static async _updateInResultsAsync(query: any, doc: any, oldDoc: any) {
+		if (doc._id !== oldDoc._id) {
 			throw new Error("Can't change a doc's _id while updating");
 		}
 
@@ -1898,241 +1844,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 			query.movedBefore && (await query.movedBefore(doc._id, next));
 		}
-	};
-
-	// helpers used by compiled selector code
-	static _f = {
-		// XXX for _all and _in, consider building 'inquery' at compile time..
-		_type(v: any) {
-			if (typeof v === 'number') {
-				return 1;
-			}
-
-			if (typeof v === 'string') {
-				return 2;
-			}
-
-			if (typeof v === 'boolean') {
-				return 8;
-			}
-
-			if (Array.isArray(v)) {
-				return 4;
-			}
-
-			if (v === null) {
-				return 10;
-			}
-
-			// note that typeof(/x/) === "object"
-			if (v instanceof RegExp) {
-				return 11;
-			}
-
-			if (typeof v === 'function') {
-				return 13;
-			}
-
-			if (v instanceof Date) {
-				return 9;
-			}
-
-			if (EJSON.isBinary(v)) {
-				return 5;
-			}
-
-			// object
-			return 3;
-
-			// XXX support some/all of these:
-			// 14, symbol
-			// 15, javascript code with scope
-			// 16, 18: 32-bit/64-bit integer
-			// 17, timestamp
-			// 255, minkey
-			// 127, maxkey
-		},
-
-		// deep equality test: use for literal document and array matches
-		_equal(a: any, b: any) {
-			return EJSON.equals(a, b, { keyOrderSensitive: true });
-		},
-
-		// maps a type code to a value that can be used to sort values of different
-		// types
-		_typeorder(t: number) {
-			// http://www.mongodb.org/display/DOCS/What+is+the+Compare+Order+for+BSON+Types
-			// XXX what is the correct sort position for Javascript code?
-			// ('100' in the matrix below)
-			// XXX minkey/maxkey
-			return [
-				-1, // (not a type)
-				1, // number
-				2, // string
-				3, // object
-				4, // array
-				5, // binary
-				-1, // deprecated
-				6, // ObjectID
-				7, // bool
-				8, // Date
-				0, // null
-				9, // RegExp
-				-1, // deprecated
-				100, // JS code
-				2, // deprecated (symbol)
-				100, // JS code
-				1, // 32-bit int
-				8, // Mongo timestamp
-				1, // 64-bit int
-			][t];
-		},
-
-		// compare two values of unknown type according to BSON ordering
-		// semantics. (as an extension, consider 'undefined' to be less than
-		// any other value.) return negative if a is less, positive if b is
-		// less, or 0 if equal
-		// eslint-disable-next-line complexity
-		_cmp(a: unknown, b: unknown): number {
-			if (a === undefined) {
-				return b === undefined ? 0 : -1;
-			}
-
-			if (b === undefined) {
-				return 1;
-			}
-
-			let ta = LocalCollection._f._type(a);
-			let tb = LocalCollection._f._type(b);
-
-			const oa = LocalCollection._f._typeorder(ta);
-			const ob = LocalCollection._f._typeorder(tb);
-
-			if (oa !== ob) {
-				return oa < ob ? -1 : 1;
-			}
-
-			// XXX need to implement this if we implement Symbol or integers, or
-			// Timestamp
-			if (ta !== tb) {
-				throw Error('Missing type coercion logic in _cmp');
-			}
-
-			if (ta === 7) {
-				// ObjectID
-				// Convert to string.
-				// eslint-disable-next-line no-multi-assign
-				ta = tb = 2;
-				a = (a as { toHexString(): string }).toHexString();
-				b = (b as { toHexString(): string }).toHexString();
-			}
-
-			if (ta === 9) {
-				// Date
-				// Convert to millis.
-				// eslint-disable-next-line no-multi-assign
-				ta = tb = 1;
-				a = isNaN(a as number) ? 0 : (a as Date).getTime();
-				b = isNaN(b as number) ? 0 : (b as Date).getTime();
-			}
-
-			if (ta === 1) {
-				// double
-				return (a as number) - (b as number);
-			}
-
-			if (tb === 2)
-				// string
-				// eslint-disable-next-line no-nested-ternary
-				return (a as string) < (b as string) ? -1 : a === b ? 0 : 1;
-
-			if (ta === 3) {
-				// Object
-				// this could be much more efficient in the expected case ...
-				const toArray = (object: any) => {
-					const result: any[] = [];
-
-					Object.keys(object).forEach((key) => {
-						result.push(key, object[key]);
-					});
-
-					return result;
-				};
-
-				return LocalCollection._f._cmp(toArray(a), toArray(b));
-			}
-
-			if (ta === 4) {
-				// Array
-				for (let i = 0; ; i++) {
-					if (i === (a as unknown[]).length) {
-						return i === (b as unknown[]).length ? 0 : -1;
-					}
-
-					if (i === (b as unknown[]).length) {
-						return 1;
-					}
-
-					const s = LocalCollection._f._cmp((a as unknown[])[i], (b as unknown[])[i]);
-					if (s !== 0) {
-						return s;
-					}
-				}
-			}
-
-			if (ta === 5) {
-				// binary
-				// Surprisingly, a small binary blob is always less than a large one in
-				// Mongo.
-				if ((a as Uint8Array).length !== (b as Uint8Array).length) {
-					return (a as Uint8Array).length - (b as Uint8Array).length;
-				}
-
-				for (let i = 0; i < (a as Uint8Array).length; i++) {
-					if ((a as Uint8Array)[i] < (b as Uint8Array)[i]) {
-						return -1;
-					}
-
-					if ((a as Uint8Array)[i] > (b as Uint8Array)[i]) {
-						return 1;
-					}
-				}
-
-				return 0;
-			}
-
-			if (ta === 8) {
-				// boolean
-				if (a) {
-					return b ? 0 : 1;
-				}
-
-				return b ? -1 : 0;
-			}
-
-			if (ta === 10)
-				// null
-				return 0;
-
-			if (ta === 11)
-				// regexp
-				throw Error('Sorting not supported on regular expression'); // XXX
-
-			// 13: javascript code
-			// 14: symbol
-			// 15: javascript code with scope
-			// 16: 32-bit integer
-			// 17: timestamp
-			// 18: 64-bit integer
-			// 255: minkey
-			// 127: maxkey
-			if (ta === 13)
-				// javascript code
-				throw Error('Sorting not supported on Javascript code'); // XXX
-
-			throw Error('Unknown type to sort');
-		},
-	};
+	}
 }
 
 const MODIFIERS = {
@@ -2346,7 +2058,7 @@ const MODIFIERS = {
 			sortFunction = new Sorter(arg.$sort).getComparator();
 
 			toPush.forEach((element) => {
-				if (LocalCollection._f._type(element) !== 3) {
+				if (_f._type(element) !== 3) {
 					throw createMinimongoError('$push like modifiers using $sort require all elements to be objects', { field });
 				}
 			});
@@ -2422,7 +2134,7 @@ const MODIFIERS = {
 			throw createMinimongoError('Cannot apply $addToSet modifier to non-array', { field });
 		} else {
 			values.forEach((value: any) => {
-				if (toAdd.some((element) => LocalCollection._f._equal(value, element))) {
+				if (toAdd.some((element) => _f._equal(value, element))) {
 					return;
 				}
 
@@ -2480,7 +2192,7 @@ const MODIFIERS = {
 
 			out = toPull.filter((element) => !matcher.documentMatches(element).result);
 		} else {
-			out = toPull.filter((element) => !LocalCollection._f._equal(element, arg));
+			out = toPull.filter((element) => !_f._equal(element, arg));
 		}
 
 		target[field] = out;
@@ -2504,7 +2216,7 @@ const MODIFIERS = {
 			throw createMinimongoError('Cannot apply $pull/pullAll modifier to non-array', { field });
 		}
 
-		target[field] = toPull.filter((object) => !arg.some((element) => LocalCollection._f._equal(object, element)));
+		target[field] = toPull.filter((object) => !arg.some((element) => _f._equal(object, element)));
 	},
 	$bit(_target: any, field: any) {
 		// XXX mongo only supports $bit on integers, and we only support

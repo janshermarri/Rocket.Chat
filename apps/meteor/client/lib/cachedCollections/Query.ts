@@ -9,7 +9,7 @@ export interface BaseQuery<T extends { _id: string }, TOptions extends Options<T
 	cursor: Cursor<T, TOptions, TProjection>;
 	dirty: boolean;
 	matcher: Matcher<T>;
-	projectionFn: (doc: Omit<T, '_id'>) => TProjection;
+	projectionFn: (doc: Partial<T>) => TProjection;
 }
 
 // eslint-disable-next-line @typescript-eslint/naming-convention
