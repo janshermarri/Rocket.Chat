@@ -1,6 +1,8 @@
 import { EJSON } from 'meteor/ejson';
 
-export interface IIdMap<TId, TValue> {
+import { consumePairs, consumePairsAsync } from './common';
+
+interface IIdMap<TId, TValue> {
 	get(id: TId): TValue | undefined;
 	set(id: TId, value: TValue): void;
 	remove(id: TId): void;
@@ -45,24 +47,12 @@ export class IdMap<TId, TValue> implements IIdMap<TId, TValue> {
 	}
 
 	// Iterates over the items in the map. Return `false` to break the loop.
-	forEach(iterator: (value: TValue, id: TId) => boolean | void): void {
-		// don't use _.each, because we can't break out of it.
-		for (const [key, value] of this._map) {
-			const breakIfFalse = iterator.call(null, value, key);
-			if (breakIfFalse === false) {
-				return;
-			}
-		}
+	forEach(callback: (value: TValue, id: TId) => boolean | void): void {
+		consumePairs(this._map, callback);
 	}
 
-	async forEachAsync(iterator: (value: TValue, id: TId) => Promise<boolean | void>): Promise<void> {
-		for (const [key, value] of this._map) {
-			// eslint-disable-next-line no-await-in-loop
-			const breakIfFalse = await iterator.call(null, value, key);
-			if (breakIfFalse === false) {
-				return;
-			}
-		}
+	async forEachAsync(callback: (value: TValue, id: TId) => Promise<boolean | void>): Promise<void> {
+		await consumePairsAsync(this._map, callback);
 	}
 
 	size(): number {
@@ -86,5 +76,9 @@ export class IdMap<TId, TValue> implements IIdMap<TId, TValue> {
 			clone._map.set(key, EJSON.clone(value));
 		});
 		return clone;
+	}
+
+	[Symbol.iterator](): IterableIterator<[TId, TValue]> {
+		return this._map.entries();
 	}
 }

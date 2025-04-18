@@ -1,5 +1,5 @@
 import type { Cursor } from './Cursor';
-import type { IIdMap } from './IdMap';
+import type { IdMap } from './IdMap';
 import type { Matcher } from './Matcher';
 import type { Options } from './MinimongoCollection';
 import type { Sorter } from './Sorter';
@@ -18,8 +18,8 @@ export interface IncompleteUnorderedQuery<T extends { _id: string }, TOptions ex
 	distances?: undefined;
 	sorter: null;
 	ordered: false;
-	results?: IIdMap<T['_id'], T>;
-	resultsSnapshot?: IIdMap<T['_id'], T> | null;
+	results?: IdMap<T['_id'], T>;
+	resultsSnapshot?: IdMap<T['_id'], T> | null;
 	added?: (id: T['_id'], fields: TProjection) => void;
 	changed?: (id: T['_id'], fields: TProjection) => void;
 	removed?: (id: T['_id']) => void;
@@ -28,8 +28,8 @@ export interface IncompleteUnorderedQuery<T extends { _id: string }, TOptions ex
 // eslint-disable-next-line @typescript-eslint/naming-convention
 export interface UnorderedQuery<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T>
 	extends IncompleteUnorderedQuery<T, TOptions, TProjection> {
-	results: IIdMap<T['_id'], T>;
-	resultsSnapshot: IIdMap<T['_id'], T> | null;
+	results: IdMap<T['_id'], T>;
+	resultsSnapshot: IdMap<T['_id'], T> | null;
 	added: (id: T['_id'], fields: TProjection) => void;
 	changed: (id: T['_id'], fields: TProjection) => void;
 	removed: (id: T['_id']) => void;
@@ -38,7 +38,7 @@ export interface UnorderedQuery<T extends { _id: string }, TOptions extends Opti
 // eslint-disable-next-line @typescript-eslint/naming-convention
 export interface IncompleteOrderedQuery<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T>
 	extends BaseQuery<T, TOptions, TProjection> {
-	distances?: IIdMap<T['_id'], number>;
+	distances?: IdMap<T['_id'], number>;
 	ordered: true;
 	sorter: Sorter<T>;
 	results?: T[];

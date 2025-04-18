@@ -1,6 +1,6 @@
 import { EJSON } from 'meteor/ejson';
 
-import type { IIdMap } from './IdMap';
+import type { IdMap } from './IdMap';
 import { hasOwn } from './common';
 
 function isObjEmpty(obj: Record<string, unknown>): boolean {
@@ -35,34 +35,34 @@ export class DiffSequence {
 
 	static diffQueryChanges<T extends { _id: string }, TProjection extends T = T>(
 		ordered: false,
-		oldResults: IIdMap<T['_id'], T>,
-		newResults: IIdMap<T['_id'], T>,
+		oldResults: IdMap<T['_id'], T>,
+		newResults: IdMap<T['_id'], T>,
 		observer: Observer<T>,
 		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
 	): void;
 
 	static diffQueryChanges<T extends { _id: string }, TProjection extends T = T>(
 		ordered: boolean,
-		oldResults: T[] | IIdMap<T['_id'], T>,
-		newResults: T[] | IIdMap<T['_id'], T>,
+		oldResults: T[] | IdMap<T['_id'], T>,
+		newResults: T[] | IdMap<T['_id'], T>,
 		observer: Observer<T>,
 		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
 	): void;
 
 	static diffQueryChanges<T extends { _id: string }, TProjection extends T = T>(
 		ordered: boolean,
-		oldResults: T[] | IIdMap<T['_id'], T>,
-		newResults: T[] | IIdMap<T['_id'], T>,
+		oldResults: T[] | IdMap<T['_id'], T>,
+		newResults: T[] | IdMap<T['_id'], T>,
 		observer: Observer<T>,
 		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
 	): void {
 		if (ordered) DiffSequence.diffQueryOrderedChanges(oldResults as T[], newResults as T[], observer, options);
-		else DiffSequence.diffQueryUnorderedChanges(oldResults as IIdMap<T['_id'], T>, newResults as IIdMap<T['_id'], T>, observer, options);
+		else DiffSequence.diffQueryUnorderedChanges(oldResults as IdMap<T['_id'], T>, newResults as IdMap<T['_id'], T>, observer, options);
 	}
 
 	static diffQueryUnorderedChanges<T extends { _id: string }, TProjection extends T = T>(
-		oldResults: IIdMap<T['_id'], T>,
-		newResults: IIdMap<T['_id'], T>,
+		oldResults: IdMap<T['_id'], T>,
+		newResults: IdMap<T['_id'], T>,
 		observer: Observer<T>,
 		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
 	): void {

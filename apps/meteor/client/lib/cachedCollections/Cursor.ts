@@ -3,18 +3,15 @@ import { Meteor } from 'meteor/meteor';
 import type { Filter } from 'mongodb';
 
 import { DiffSequence } from './DiffSequence';
-import type { IIdMap } from './IdMap';
 import { IdMap } from './IdMap';
 import type { LocalCollection } from './LocalCollection';
 import { Matcher } from './Matcher';
 import type { FieldSpecifier, Options, Transform } from './MinimongoCollection';
-import type { ObserveCallbacks } from './ObserveCallbacks';
-import type { ObserveChangesCallbacks } from './ObserveChangesCallbacks';
 import { ObserveHandle } from './ObserveHandle';
 import { OrderedDict } from './OrderedDict';
 import type { Query } from './Query';
 import { Sorter } from './Sorter';
-import { _isPlainObject, _selectorIsId, createMinimongoError, hasOwn, projectionDetails } from './common';
+import { _isPlainObject, _selectorIsId, consumePairs, createMinimongoError, hasOwn, projectionDetails } from './common';
 
 export type DispatchTransform<TTransform, T, TProjection> = TTransform extends (...args: any) => any
 	? ReturnType<TTransform>
@@ -449,8 +446,8 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 				}
 			}
 			// it means it's an id map
-			if ((query.results as IIdMap<T['_id'], T>).size?.()) {
-				(query.results as IIdMap<T['_id'], T>).forEach(handler);
+			if ((query.results as IdMap<T['_id'], T>).size?.()) {
+				(query.results as IdMap<T['_id'], T>).forEach(handler);
 			}
 		}
 
@@ -545,19 +542,15 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	// (otherwise it will just create its own _IdMap). The observeChanges
 	// implementation uses this to remember the distances after this function
 	// returns.
-	_getRawObjects(options: { ordered: true; applySkipLimit?: boolean; distances?: IIdMap<T['_id'], number> }): T[];
+	_getRawObjects(options: { ordered: true; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> }): T[];
 
-	_getRawObjects(options: { ordered: false; applySkipLimit?: boolean; distances?: IIdMap<T['_id'], number> }): IIdMap<T['_id'], T>;
+	_getRawObjects(options: { ordered: false; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> }): IdMap<T['_id'], T>;
 
-	_getRawObjects(options?: {
-		ordered?: boolean;
-		applySkipLimit?: boolean;
-		distances?: IIdMap<T['_id'], number>;
-	}): IIdMap<T['_id'], T> | T[];
+	_getRawObjects(options?: { ordered?: boolean; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> }): IdMap<T['_id'], T> | T[];
 
 	_getRawObjects(
-		options: { ordered?: boolean; applySkipLimit?: boolean; distances?: IIdMap<T['_id'], number> } = {},
-	): IIdMap<T['_id'], T> | T[] {
+		options: { ordered?: boolean; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> } = {},
+	): IdMap<T['_id'], T> | T[] {
 		// By default this method will respect skip and limit because .fetch(),
 		// .forEach() etc... expect this behaviour. It can be forced to ignore
 		// skip and limit by setting applySkipLimit to false (.count() does this,
@@ -566,7 +559,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 		// XXX use OrderedDict instead of array, and make IdMap and OrderedDict
 		// compatible
-		const results: T[] | IIdMap<T['_id'], T> = options.ordered ? [] : new IdMap<T['_id'], T>();
+		const results: T[] | IdMap<T['_id'], T> = options.ordered ? [] : new IdMap<T['_id'], T>();
 
 		// fast path for single ID value
 		if (this._selectorId !== undefined) {
@@ -581,7 +574,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 				if (options.ordered) {
 					(results as T[]).push(selectedDoc);
 				} else {
-					(results as IIdMap<T['_id'], T>).set(this._selectorId, selectedDoc);
+					(results as IdMap<T['_id'], T>).set(this._selectorId, selectedDoc);
 				}
 			}
 			return results;
@@ -592,7 +585,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		// in the observeChanges case, distances is actually part of the "query"
 		// (ie, live results set) object.  in other cases, distances is only used
 		// inside this function.
-		let distances: IIdMap<T['_id'], number> | undefined;
+		let distances: IdMap<T['_id'], number> | undefined;
 		if (this.matcher.hasGeoQuery() && options.ordered) {
 			if (options.distances) {
 				distances = options.distances;
@@ -603,7 +596,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		}
 
 		Meteor._runFresh(() => {
-			this.collection._docs.forEach((doc, id) => {
+			consumePairs(this.collection._docs, (doc, id) => {
 				const matchResult = this.matcher.documentMatches(doc);
 				if (matchResult.result) {
 					if (options.ordered) {
@@ -613,7 +606,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 							distances.set(id, matchResult.distance);
 						}
 					} else {
-						(results as IIdMap<T['_id'], T>).set(id, doc);
+						(results as IdMap<T['_id'], T>).set(id, doc);
 					}
 				}
 
@@ -992,9 +985,9 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 // invoked immediately before the docs field is updated; this object is made
 // available as `this` to those callbacks.
 export class _CachingChangeObserver<T extends { _id: string }> {
-	ordered: boolean;
+	private ordered: boolean;
 
-	docs: IIdMap<T['_id'], T> | OrderedDict<T['_id'], T>;
+	docs: IdMap<T['_id'], T> | OrderedDict<T['_id'], T>;
 
 	applyChange: any;
 
@@ -1059,7 +1052,7 @@ export class _CachingChangeObserver<T extends { _id: string }> {
 
 					doc._id = id;
 
-					(this.docs as IIdMap<T['_id'], T>).set(id, doc);
+					(this.docs as IdMap<T['_id'], T>).set(id, doc);
 				},
 			};
 		}
@@ -1089,3 +1082,28 @@ export class _CachingChangeObserver<T extends { _id: string }> {
 		};
 	}
 }
+
+type ObserveCallbacks<T> = {
+	addedAt?: (document: T, atIndex: number | null, before: unknown) => void;
+	added?: (document: T) => void;
+	changedAt?: (newDocument: T, oldDocument: T, atIndex: number) => void;
+	changed?: (newDocument: T, oldDocument: T) => void;
+	removedAt?: (document: T, atIndex: number) => void;
+	removed?: (document: T) => void;
+	movedTo?: (document: T, oldIndex: number, newIndex: number, before: unknown) => void;
+	addedBefore?: (document: T, before: unknown) => void;
+	movedBefore?: (document: T, before: unknown) => void;
+	_suppress_initial?: boolean;
+	_no_indices?: boolean;
+	_allow_unordered?: boolean;
+};
+
+type ObserveChangesCallbacks<T extends { _id: string }> = {
+	addedBefore?: (this: _CachingChangeObserver<T>, id: T['_id'], fields: T, before: T['_id'] | null) => void;
+	changed?: (this: _CachingChangeObserver<T>, id: T['_id'], fields: T) => void;
+	movedBefore?: (this: _CachingChangeObserver<T>, id: T['_id'], before: T['_id'] | null) => void;
+	removed?: (this: _CachingChangeObserver<T>, id: T['_id']) => void;
+	added?: (this: _CachingChangeObserver<T>, id: T['_id'], fields: T) => void;
+	_allow_unordered?: boolean;
+	_suppress_initial?: boolean;
+};

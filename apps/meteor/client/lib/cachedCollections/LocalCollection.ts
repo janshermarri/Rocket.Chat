@@ -5,7 +5,6 @@ import type { StoreApi, UseBoundStore } from 'zustand';
 
 import { Cursor, type DispatchTransform } from './Cursor';
 import { DiffSequence } from './DiffSequence';
-import type { IIdMap } from './IdMap';
 import { IdMap } from './IdMap';
 import { Matcher } from './Matcher';
 import type { Options } from './MinimongoCollection';
@@ -24,7 +23,7 @@ import {
 	_selectorIsId,
 } from './common';
 
-export interface ILocalCollection<T extends { _id: string }> {
+interface ILocalCollection<T extends { _id: string }> {
 	next_qid: number;
 	queries: Record<string, Query<T, Options<T>, any>>;
 	paused: boolean;
@@ -46,9 +45,9 @@ export interface ILocalCollection<T extends { _id: string }> {
 	};
 	remove(selector: Filter<T>, callback?: (error: Error | null, result: number) => void): number;
 	resumeObserversClient(): void;
-	retrieveOriginals(): IIdMap<T['_id'], T | undefined>;
+	retrieveOriginals(): IdMap<T['_id'], T | undefined>;
 	saveOriginals(): void;
-	prepareUpdate(selector: Filter<T>): Record<string, IIdMap<T['_id'], T> | T[]>;
+	prepareUpdate(selector: Filter<T>): Record<string, IdMap<T['_id'], T> | T[]>;
 	finishUpdate(params: {
 		options: { _returnObject?: boolean };
 		updateCount: number;
@@ -181,7 +180,7 @@ export interface ILocalCollection<T extends { _id: string }> {
 // LocalCollection: a set of documents that supports queries and modifiers.
 export class LocalCollection<T extends { _id: string }> implements ILocalCollection<T> {
 	// _id -> document (also containing id)
-	readonly _docs: IIdMap<T['_id'], T> = new IdMap<T['_id'], T>();
+	readonly _docs = new IdMap<T['_id'], T>();
 
 	readonly _observeQueue = new SynchronousQueue();
 
@@ -198,11 +197,11 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	// null if not saving originals; an IdMap from id to original document value
 	// if saving originals. See comments before saveOriginals().
-	private _savedOriginals: IIdMap<T['_id'], T | undefined> | null = null;
+	private _savedOriginals: IdMap<T['_id'], T | undefined> | null = null;
 
 	paused = false;
 
-	constructor(protected store: UseBoundStore<StoreApi<{ records: T[] }>>) {
+	constructor(public store: UseBoundStore<StoreApi<{ records: T[] }>>) {
 		this.find({}).observe({
 			added: (record) => {
 				store.setState((state) => ({ records: [...state.records, record] }));
@@ -419,7 +418,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			if (query.ordered) {
 				query.results = [];
 			} else {
-				(query.results as IIdMap<T['_id'], T>).clear();
+				(query.results as IdMap<T['_id'], T>).clear();
 			}
 		});
 
@@ -632,7 +631,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// it. (We don't need to save the original results of paused queries because
 		// they already have a resultsSnapshot and we won't be diffing in
 		// _recomputeResults.)
-		const qidToOriginalResults: Record<string, IIdMap<T['_id'], T> | T[]> = {};
+		const qidToOriginalResults: Record<string, IdMap<T['_id'], T> | T[]> = {};
 
 		// We should only clone each document once, even if it appears in multiple
 		// queries
@@ -1032,7 +1031,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			} else {
 				// Because we don't support skip or limit (yet) in unordered queries, we
 				// can just do a direct lookup.
-				matchedBefore[qid] = (query.results as IIdMap<T['_id'], T>).has(doc._id);
+				matchedBefore[qid] = (query.results as IdMap<T['_id'], T>).has(doc._id);
 			}
 		});
 
@@ -1142,7 +1141,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// applied.
 	//
 	// oldResults is guaranteed to be ignored if the query is not paused.
-	_recomputeResults(query: Query<T, Options<T>, any>, oldResults?: IIdMap<T['_id'], T> | T[]) {
+	_recomputeResults(query: Query<T, Options<T>, any>, oldResults?: IdMap<T['_id'], T> | T[]) {
 		if (this.paused) {
 			// There's no reason to recompute the results now as we're still paused.
 			// By flagging the query as "dirty", the recompute will be performed
