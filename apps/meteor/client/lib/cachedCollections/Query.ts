@@ -1,5 +1,5 @@
 import type { Cursor } from './Cursor';
-import type { IIdMap } from './IIdMap';
+import type { IIdMap } from './IdMap';
 import type { Matcher } from './Matcher';
 import type { Options } from './MinimongoCollection';
 import type { Sorter } from './Sorter';

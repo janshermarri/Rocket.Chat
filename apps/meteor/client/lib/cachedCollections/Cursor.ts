@@ -2,17 +2,19 @@ import { EJSON } from 'meteor/ejson';
 import { Meteor } from 'meteor/meteor';
 import type { Filter } from 'mongodb';
 
-import type { IIdMap } from './IIdMap';
+import { DiffSequence } from './DiffSequence';
+import type { IIdMap } from './IdMap';
 import { IdMap } from './IdMap';
-import { LocalCollection } from './LocalCollection';
+import type { LocalCollection } from './LocalCollection';
 import { Matcher } from './Matcher';
 import type { FieldSpecifier, Options, Transform } from './MinimongoCollection';
 import type { ObserveCallbacks } from './ObserveCallbacks';
 import type { ObserveChangesCallbacks } from './ObserveChangesCallbacks';
 import { ObserveHandle } from './ObserveHandle';
+import { OrderedDict } from './OrderedDict';
 import type { Query } from './Query';
 import { Sorter } from './Sorter';
-import { hasOwn } from './common';
+import { _isPlainObject, _selectorIsId, createMinimongoError, hasOwn, projectionDetails } from './common';
 
 export type DispatchTransform<TTransform, T, TProjection> = TTransform extends (...args: any) => any
 	? ReturnType<TTransform>
@@ -49,7 +51,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		this.sorter = null;
 		this.matcher = new Matcher(selector);
 
-		if (LocalCollection._selectorIsIdPerhapsAsObject<T>(selector)) {
+		if (this._selectorIsIdPerhapsAsObject(selector)) {
 			// stash for fast _id and { _id }
 			this._selectorId = hasOwn.call(selector, '_id') ? (selector as { _id?: string })._id : selector;
 		} else {
@@ -64,7 +66,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		this.limit = options?.limit;
 		this.fields = options?.projection || options?.fields;
 
-		this._projectionFn = LocalCollection._compileProjection(this.fields || {});
+		this._projectionFn = this._compileProjection(this.fields || {});
 
 		this._transform = this.wrapTransform(options?.transform);
 
@@ -106,7 +108,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 			// Package.tracker here
 			const transformed = Tracker.nonreactive(() => transform(doc));
 
-			if (!LocalCollection._isPlainObject(transformed)) {
+			if (!_isPlainObject(transformed)) {
 				throw new Error('transform must return object');
 			}
 
@@ -312,7 +314,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	 *                           changes
 	 */
 	observe(options: ObserveCallbacks<TProjection>) {
-		return LocalCollection._observeFromObserveChanges(this, options);
+		return this._observeFromObserveChanges(options);
 	}
 
 	/**
@@ -336,7 +338,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	 *                           changes
 	 */
 	observeChanges(options: ObserveChangesCallbacks<TProjection>) {
-		const ordered = LocalCollection._observeChangesCallbacksAreOrdered(options);
+		const ordered = Cursor._observeChangesCallbacksAreOrdered(options);
 
 		// there are several places that assume you aren't combining skip/limit with
 		// unordered observe.  eg, update's EJSON.clone, and the "there are several"
@@ -727,5 +729,363 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		} catch (error) {
 			return Promise.reject(error);
 		}
+	}
+
+	private _observeFromObserveChanges(observeCallbacks: ObserveCallbacks<TProjection>) {
+		const transform = this.getTransform() || ((doc: T) => doc);
+		let suppressed = !!observeCallbacks._suppress_initial;
+
+		let observeChangesCallbacks: ObserveChangesCallbacks<T>;
+		if (this._observeCallbacksAreOrdered(observeCallbacks)) {
+			// The "_no_indices" option sets all index arguments to -1 and skips the
+			// linear scans required to generate them.  This lets observers that don't
+			// need absolute indices benefit from the other features of this API --
+			// relative order, transforms, and applyChanges -- without the speed hit.
+			const indices = !observeCallbacks._no_indices;
+
+			observeChangesCallbacks = {
+				addedBefore(id, fields, before) {
+					const check = suppressed || !(observeCallbacks.addedAt || observeCallbacks.added);
+					if (check) {
+						return;
+					}
+
+					const doc = transform(Object.assign(fields, { _id: id }));
+
+					if (observeCallbacks.addedAt) {
+						observeCallbacks.addedAt(
+							doc,
+							// eslint-disable-next-line no-nested-ternary
+							indices ? (before ? (this.docs as OrderedDict<T['_id'], T>).indexOf(before) : this.docs.size()) : -1,
+							before,
+						);
+					} else {
+						observeCallbacks.added!(doc);
+					}
+				},
+				changed(id, fields) {
+					if (!(observeCallbacks.changedAt || observeCallbacks.changed)) {
+						return;
+					}
+
+					const doc = EJSON.clone(this.docs.get(id));
+					if (!doc) {
+						throw new Error(`Unknown id for changed: ${id}`);
+					}
+
+					const oldDoc = transform(EJSON.clone(doc));
+
+					DiffSequence.applyChanges(doc, fields);
+
+					if (observeCallbacks.changedAt) {
+						observeCallbacks.changedAt(transform(doc), oldDoc, indices ? (this.docs as OrderedDict<T['_id'], T>).indexOf(id) : -1);
+					} else {
+						observeCallbacks.changed!(transform(doc), oldDoc);
+					}
+				},
+				movedBefore(id, before) {
+					if (!observeCallbacks.movedTo) {
+						return;
+					}
+
+					const from = indices ? (this.docs as OrderedDict<T['_id'], T>).indexOf(id) : -1;
+					// eslint-disable-next-line no-nested-ternary
+					let to = indices ? (before ? (this.docs as OrderedDict<T['_id'], T>).indexOf(before) : this.docs.size()) : -1;
+
+					// When not moving backwards, adjust for the fact that removing the
+					// document slides everything back one slot.
+					if (to > from) {
+						--to;
+					}
+
+					observeCallbacks.movedTo(transform(EJSON.clone(this.docs.get(id)!)), from, to, before || null);
+				},
+				removed(id) {
+					if (!(observeCallbacks.removedAt || observeCallbacks.removed)) {
+						return;
+					}
+
+					// technically maybe there should be an EJSON.clone here, but it's about
+					// to be removed from this.docs!
+					const doc = transform(this.docs.get(id)!);
+
+					if (observeCallbacks.removedAt) {
+						observeCallbacks.removedAt(doc, indices ? (this.docs as OrderedDict<T['_id'], T>).indexOf(id) : -1);
+					} else {
+						observeCallbacks.removed!(doc);
+					}
+				},
+			};
+		} else {
+			observeChangesCallbacks = {
+				added(id, fields) {
+					if (!suppressed && observeCallbacks.added) {
+						observeCallbacks.added(transform(Object.assign(fields, { _id: id })));
+					}
+				},
+				changed(id, fields) {
+					if (observeCallbacks.changed) {
+						const oldDoc = this.docs.get(id)!;
+						const doc = EJSON.clone(oldDoc);
+
+						DiffSequence.applyChanges(doc!, fields);
+
+						observeCallbacks.changed(transform(doc), transform(EJSON.clone(oldDoc)));
+					}
+				},
+				removed(id) {
+					if (observeCallbacks.removed) {
+						observeCallbacks.removed(transform(this.docs.get(id)!));
+					}
+				},
+			};
+		}
+
+		const changeObserver = new _CachingChangeObserver({
+			callbacks: observeChangesCallbacks,
+		});
+
+		// CachingChangeObserver clones all received input on its callbacks
+		// So we can mark it as safe to reduce the ejson clones.
+		// This is tested by the `mongo-livedata - (extended) scribbling` tests
+		changeObserver.applyChange._fromObserve = true;
+		const handle = this.observeChanges(changeObserver.applyChange);
+
+		// If needed, re-enable callbacks as soon as the initial batch is ready.
+		const setSuppressed = (h: any) => {
+			if (h.isReady) suppressed = false;
+			// eslint-disable-next-line no-return-assign
+			else h.isReadyPromise?.then(() => (suppressed = false));
+		};
+		// When we call cursor.observeChanges() it can be the on from
+		// the mongo package (instead of the minimongo one) and it doesn't have isReady and isReadyPromise
+		if (Meteor._isPromise(handle)) {
+			handle.then(setSuppressed);
+		} else {
+			setSuppressed(handle);
+		}
+		return handle;
+	}
+
+	private _observeCallbacksAreOrdered(callbacks: ObserveCallbacks<TProjection>) {
+		if (callbacks.added && callbacks.addedAt) {
+			throw new Error('Please specify only one of added() and addedAt()');
+		}
+
+		if (callbacks.changed && callbacks.changedAt) {
+			throw new Error('Please specify only one of changed() and changedAt()');
+		}
+
+		if (callbacks.removed && callbacks.removedAt) {
+			throw new Error('Please specify only one of removed() and removedAt()');
+		}
+
+		return !!(callbacks.addedAt || callbacks.changedAt || callbacks.movedTo || callbacks.removedAt);
+	}
+
+	// Is the selector just lookup by _id (shorthand or not)?
+	private _selectorIsIdPerhapsAsObject(selector: unknown): selector is T['_id'] | Pick<T, '_id'> {
+		return (
+			_selectorIsId(selector) ||
+			(_selectorIsId(selector && (selector as { _id?: string })._id) && Object.keys(selector as object).length === 1)
+		);
+	}
+
+	static _observeChangesCallbacksAreOrdered<T extends { _id: string }>(callbacks: ObserveChangesCallbacks<T>) {
+		if (callbacks.added && callbacks.addedBefore) {
+			throw new Error('Please specify only one of added() and addedBefore()');
+		}
+
+		return !!(callbacks.addedBefore || callbacks.movedBefore);
+	}
+
+	private _checkSupportedProjection(fields: FieldSpecifier) {
+		if (fields !== Object(fields) || Array.isArray(fields)) {
+			throw createMinimongoError('fields option must be an object');
+		}
+
+		Object.keys(fields).forEach((keyPath) => {
+			if (keyPath.split('.').includes('$')) {
+				throw createMinimongoError("Minimongo doesn't support $ operator in projections yet.");
+			}
+
+			const value = fields[keyPath];
+
+			if (typeof value === 'object' && ['$elemMatch', '$meta', '$slice'].some((key) => hasOwn.call(value, key))) {
+				throw createMinimongoError("Minimongo doesn't support operators in projections yet.");
+			}
+
+			if (![1, 0, true, false].includes(value)) {
+				throw createMinimongoError('Projection values should be one of 1, 0, true, or false');
+			}
+		});
+	}
+
+	// Knows how to compile a fields projection to a predicate function.
+	// @returns - Function: a closure that filters out an object according to the
+	//            fields projection rules:
+	//            @param obj - Object: MongoDB-styled document
+	//            @returns - Object: a document with the fields filtered out
+	//                       according to projection rules. Doesn't retain subfields
+	//                       of passed argument.
+	private _compileProjection(fields: FieldSpecifier) {
+		this._checkSupportedProjection(fields);
+
+		const _idProjection = fields._id === undefined ? true : fields._id;
+		const details = projectionDetails(fields);
+
+		// returns transformed doc according to ruleTree
+		const transform = (doc: any, ruleTree: any): any => {
+			// Special case for "sets"
+			if (Array.isArray(doc)) {
+				return doc.map((subdoc) => transform(subdoc, ruleTree));
+			}
+
+			const result = details.including ? {} : EJSON.clone(doc);
+
+			Object.keys(ruleTree).forEach((key) => {
+				if (doc == null || !hasOwn.call(doc, key)) {
+					return;
+				}
+
+				const rule = ruleTree[key];
+
+				if (rule === Object(rule)) {
+					// For sub-objects/subsets we branch
+					if (doc[key] === Object(doc[key])) {
+						result[key] = transform(doc[key], rule);
+					}
+				} else if (details.including) {
+					// Otherwise we don't even touch this subfield
+					result[key] = EJSON.clone(doc[key]);
+				} else {
+					delete result[key];
+				}
+			});
+
+			return doc != null ? result : doc;
+		};
+
+		return (doc: any) => {
+			const result = transform(doc, details.tree);
+
+			if (_idProjection && hasOwn.call(doc, '_id')) {
+				result._id = doc._id;
+			}
+
+			if (!_idProjection && hasOwn.call(result, '_id')) {
+				delete result._id;
+			}
+
+			return result;
+		};
+	}
+}
+
+// XXX maybe move these into another ObserveHelpers package or something
+
+// _CachingChangeObserver is an object which receives observeChanges callbacks
+// and keeps a cache of the current cursor state up to date in this.docs. Users
+// of this class should read the docs field but not modify it. You should pass
+// the "applyChange" field as the callbacks to the underlying observeChanges
+// call. Optionally, you can specify your own observeChanges callbacks which are
+// invoked immediately before the docs field is updated; this object is made
+// available as `this` to those callbacks.
+export class _CachingChangeObserver<T extends { _id: string }> {
+	ordered: boolean;
+
+	docs: IIdMap<T['_id'], T> | OrderedDict<T['_id'], T>;
+
+	applyChange: any;
+
+	constructor(options: any = {}) {
+		const orderedFromCallbacks = options.callbacks && Cursor._observeChangesCallbacksAreOrdered(options.callbacks);
+
+		if (hasOwn.call(options, 'ordered')) {
+			this.ordered = options.ordered;
+
+			if (options.callbacks && options.ordered !== orderedFromCallbacks) {
+				throw Error("ordered option doesn't match callbacks");
+			}
+		} else if (options.callbacks) {
+			this.ordered = orderedFromCallbacks;
+		} else {
+			throw Error('must provide ordered or callbacks');
+		}
+
+		const callbacks = options.callbacks || {};
+
+		if (this.ordered) {
+			this.docs = new OrderedDict<T['_id'], T>();
+			this.applyChange = {
+				addedBefore: (id: any, fields: any, before: any) => {
+					// Take a shallow copy since the top-level properties can be changed
+					const doc = { ...fields };
+
+					doc._id = id;
+
+					if (callbacks.addedBefore) {
+						callbacks.addedBefore.call(this, id, EJSON.clone(fields), before);
+					}
+
+					// This line triggers if we provide added with movedBefore.
+					if (callbacks.added) {
+						callbacks.added.call(this, id, EJSON.clone(fields));
+					}
+
+					// XXX could `before` be a falsy ID?  Technically
+					// idStringify seems to allow for them -- though
+					// OrderedDict won't call stringify on a falsy arg.
+					(this.docs as OrderedDict<T['_id'], T>).putBefore(id, doc, before || null);
+				},
+				movedBefore: (id: any, before: any) => {
+					if (callbacks.movedBefore) {
+						callbacks.movedBefore.call(this, id, before);
+					}
+
+					(this.docs as OrderedDict<T['_id'], T>).moveBefore(id, before || null);
+				},
+			};
+		} else {
+			this.docs = new IdMap<T['_id'], T>();
+			this.applyChange = {
+				added: (id: any, fields: any) => {
+					// Take a shallow copy since the top-level properties can be changed
+					const doc = { ...fields };
+
+					if (callbacks.added) {
+						callbacks.added.call(this, id, EJSON.clone(fields));
+					}
+
+					doc._id = id;
+
+					(this.docs as IIdMap<T['_id'], T>).set(id, doc);
+				},
+			};
+		}
+
+		// The methods in _IdMap and OrderedDict used by these callbacks are
+		// identical.
+		this.applyChange.changed = (id: any, fields: any) => {
+			const doc = this.docs.get(id);
+
+			if (!doc) {
+				throw new Error(`Unknown id for changed: ${id}`);
+			}
+
+			if (callbacks.changed) {
+				callbacks.changed.call(this, id, EJSON.clone(fields));
+			}
+
+			DiffSequence.applyChanges(doc, fields);
+		};
+
+		this.applyChange.removed = (id: any) => {
+			if (callbacks.removed) {
+				callbacks.removed.call(this, id);
+			}
+
+			this.docs.remove(id);
+		};
 	}
 }

@@ -1,6 +1,5 @@
 import { EJSON } from 'meteor/ejson';
 
-import { LocalCollection } from './LocalCollection';
 import type { Matcher } from './Matcher';
 
 export const hasOwn = Object.prototype.hasOwnProperty;
@@ -193,7 +192,7 @@ const ELEMENT_OPERATORS = {
 	$elemMatch: {
 		dontExpandLeafArrays: true,
 		compileElementSelector(operand, _valueSelector: any, matcher: Matcher<{ _id: string }>) {
-			if (!LocalCollection._isPlainObject(operand)) {
+			if (!_isPlainObject(operand)) {
 				throw Error('$elemMatch need an object');
 			}
 
@@ -387,7 +386,7 @@ const VALUE_OPERATORS = {
 		let maxDistance: any;
 		let point: any;
 		let distance;
-		if (LocalCollection._isPlainObject(operand) && hasOwn.call(operand, '$geometry')) {
+		if (_isPlainObject(operand) && hasOwn.call(operand, '$geometry')) {
 			// GeoJSON "2dsphere" mode.
 			maxDistance = operand.$maxDistance;
 			point = operand.$geometry;
@@ -535,7 +534,7 @@ function compileArrayOfDocumentSelectors(selectors: any, matcher: Matcher<{ _id:
 	}
 
 	return selectors.map((subSelector) => {
-		if (!LocalCollection._isPlainObject(subSelector)) {
+		if (!_isPlainObject(subSelector)) {
 			throw Error('$or/$and/$nor entries need to be full objects');
 		}
 
@@ -814,7 +813,7 @@ function invertBranchedMatcher(branchedMatcher: any) {
 }
 
 export function isIndexable(obj: any): obj is { [index: string | number]: any } {
-	return Array.isArray(obj) || LocalCollection._isPlainObject(obj);
+	return Array.isArray(obj) || _isPlainObject(obj);
 }
 
 export function isNumericKey(s: string) {
@@ -825,7 +824,7 @@ export function isNumericKey(s: string) {
 // with $.  Unless inconsistentOK is set, throws if some keys begin with $ and
 // others don't.
 export function isOperatorObject(valueSelector: any, inconsistentOK = false) {
-	if (!LocalCollection._isPlainObject(valueSelector)) {
+	if (!_isPlainObject(valueSelector)) {
 		return false;
 	}
 
@@ -1029,7 +1028,7 @@ export function makeLookupFunction<T>(key: string, options: any = {}) {
 		// the elements of the array'.
 		if (Array.isArray(firstLevel) && !(isNumericKey(parts[1]) && options.forSort)) {
 			firstLevel.forEach((branch, arrayIndex) => {
-				if (LocalCollection._isPlainObject(branch)) {
+				if (_isPlainObject(branch)) {
 					appendToResult(lookupRest(branch, arrayIndices ? arrayIndices.concat(arrayIndex) : [arrayIndex]));
 				}
 			});
@@ -1219,7 +1218,7 @@ export function populateDocumentWithQueryFields(query: any, document: any = {}):
 	} else {
 		// Handle meteor-specific shortcut for selecting _id
 		// eslint-disable-next-line no-lonely-if
-		if (LocalCollection._selectorIsId(query)) {
+		if (_selectorIsId(query)) {
 			insertIntoDocument(document, '_id', query);
 		}
 	}
@@ -1576,3 +1575,15 @@ export const _f = {
 		throw Error('Unknown type to sort');
 	},
 };
+
+// XXX maybe this should be EJSON.isObject, though EJSON doesn't know about
+// RegExp
+// XXX note that _type(undefined) === 3!!!!
+export function _isPlainObject(x: any): x is Record<string, any> {
+	return x && _f._type(x) === 3;
+}
+
+// Is this selector just shorthand for lookup by _id?
+export function _selectorIsId(selector: unknown): selector is string | number {
+	return typeof selector === 'number' || typeof selector === 'string';
+}

@@ -1,8 +1,7 @@
 import { EJSON } from 'meteor/ejson';
 import type { Filter } from 'mongodb';
 
-import { LocalCollection } from './LocalCollection';
-import { compileDocumentSelector, hasOwn, nothingMatcher } from './common';
+import { _selectorIsId, compileDocumentSelector, hasOwn, nothingMatcher } from './common';
 
 // The minimongo selector compiler!
 
@@ -104,7 +103,7 @@ export class Matcher<T extends { _id: string }> {
 		}
 
 		// shorthand -- scalar _id
-		if (LocalCollection._selectorIsId(selector)) {
+		if (_selectorIsId(selector)) {
 			this._selector = { _id: selector };
 			this._recordPathUsed('_id');
 

@@ -3,16 +3,12 @@ import { Meteor } from 'meteor/meteor';
 import type { CountDocumentsOptions, Filter, UpdateFilter } from 'mongodb';
 import type { StoreApi, UseBoundStore } from 'zustand';
 
-import { Cursor } from './Cursor';
+import { Cursor, type DispatchTransform } from './Cursor';
 import { DiffSequence } from './DiffSequence';
-import type { IIdMap } from './IIdMap';
-import type { ILocalCollection } from './ILocalCollection';
+import type { IIdMap } from './IdMap';
 import { IdMap } from './IdMap';
 import { Matcher } from './Matcher';
 import type { Options } from './MinimongoCollection';
-import type { ObserveCallbacks } from './ObserveCallbacks';
-import type { ObserveChangesCallbacks } from './ObserveChangesCallbacks';
-import { OrderedDict } from './OrderedDict';
 import type { OrderedQuery, Query, UnorderedQuery } from './Query';
 import { Sorter } from './Sorter';
 import { SynchronousQueue } from './SynchronousQueue';
@@ -23,9 +19,162 @@ import {
 	isOperatorObject,
 	createMinimongoError,
 	populateDocumentWithQueryFields,
-	projectionDetails,
 	_f,
+	_isPlainObject,
+	_selectorIsId,
 } from './common';
+
+export interface ILocalCollection<T extends { _id: string }> {
+	next_qid: number;
+	queries: Record<string, Query<T, Options<T>, any>>;
+	paused: boolean;
+	find(selector?: Filter<T> | T['_id']): Cursor<T, Options<T>, T>;
+	find<O extends Options<T>>(selector?: Filter<T> | T['_id'], options?: O): Cursor<T, O, DispatchTransform<O['transform'], T, T>>;
+	findOne(selector?: Filter<T> | T['_id']): T | undefined;
+	findOne<O extends Omit<Options<T>, 'limit'>>(
+		selector?: Filter<T> | T['_id'],
+		options?: O,
+	): DispatchTransform<O['transform'], T, T> | undefined;
+	prepareInsert(doc: T): string;
+	insert(doc: T, callback?: (error: Error | null, id: string) => void): string;
+	pauseObservers(): void;
+	clearResultQueries(callback: (error: Error | null, result: number) => void): number;
+	prepareRemove(selector: Filter<T>): {
+		queriesToRecompute: string[];
+		queryRemove: { qid: string; doc: T }[];
+		remove: T['_id'][];
+	};
+	remove(selector: Filter<T>, callback?: (error: Error | null, result: number) => void): number;
+	resumeObserversClient(): void;
+	retrieveOriginals(): IIdMap<T['_id'], T | undefined>;
+	saveOriginals(): void;
+	prepareUpdate(selector: Filter<T>): Record<string, IIdMap<T['_id'], T> | T[]>;
+	finishUpdate(params: {
+		options: { _returnObject?: boolean };
+		updateCount: number;
+		callback: (error: Error | null, result: number | { numberAffected: number; insertedId?: string }) => void;
+		insertedId?: string;
+		selector?: unknown;
+		mod?: UpdateFilter<T>;
+	}): { numberAffected: number; insertedId?: string } | number;
+	update(
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
+		callback: (
+			error: Error | null,
+			result:
+				| number
+				| {
+						numberAffected: number;
+						insertedId?: string;
+				  },
+		) => void,
+	): { numberAffected: number; insertedId?: string } | number;
+	update(
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
+		options: { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean } | null,
+		callback: (
+			error: Error | null,
+			result:
+				| number
+				| {
+						numberAffected: number;
+						insertedId?: string;
+				  },
+		) => void,
+	): { numberAffected: number; insertedId?: string } | number;
+	upsert(
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
+		callback: (
+			error: Error | null,
+			result:
+				| number
+				| {
+						numberAffected: number;
+						insertedId?: string;
+				  },
+		) => void,
+	): { numberAffected: number; insertedId?: string } | number;
+	upsert(
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
+		options: { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean } | null,
+		callback: (
+			error: Error | null,
+			result:
+				| number
+				| {
+						numberAffected: number;
+						insertedId?: string;
+				  },
+		) => void,
+	): { numberAffected: number; insertedId?: string } | number;
+	countDocuments(selector?: Filter<T>, options?: CountDocumentsOptions): Promise<number>;
+	estimatedDocumentCount(options: CountDocumentsOptions): Promise<number>;
+	findOneAsync(selector?: Filter<T> | T['_id']): Promise<T | undefined>;
+	findOneAsync<O extends Omit<Options<T>, 'limit'>>(
+		selector?: Filter<T> | T['_id'],
+		options?: O,
+	): Promise<DispatchTransform<O['transform'], T, T> | undefined>;
+	insertAsync(doc: T, callback?: (error: Error | null, id: string) => void): Promise<string>;
+	resumeObserversServer(): Promise<void>;
+	updateAsync(
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
+		callback: (
+			error: Error | null,
+			result:
+				| number
+				| {
+						numberAffected: number;
+						insertedId?: string;
+				  },
+		) => void,
+	): Promise<{ numberAffected: number; insertedId?: string } | number>;
+	updateAsync(
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
+		options: { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean } | null,
+		callback: (
+			error: Error | null,
+			result:
+				| number
+				| {
+						numberAffected: number;
+						insertedId?: string;
+				  },
+		) => void,
+	): Promise<{ numberAffected: number; insertedId?: string } | number>;
+	upsertAsync(
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
+		callback: (
+			error: Error | null,
+			result:
+				| number
+				| {
+						numberAffected: number;
+						insertedId?: string;
+				  },
+		) => void,
+	): Promise<{ numberAffected: number; insertedId?: string } | number>;
+	upsertAsync(
+		selector: Filter<T>,
+		mod: UpdateFilter<T>,
+		options: { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean } | null,
+		callback: (
+			error: Error | null,
+			result:
+				| number
+				| {
+						numberAffected: number;
+						insertedId?: string;
+				  },
+		) => void,
+	): Promise<{ numberAffected: number; insertedId?: string } | number>;
+}
 
 // XXX type checking on selectors (graceful error if malformed)
 
@@ -220,7 +369,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 					queriesToRecompute.push(qid);
 				} else {
 					// eslint-disable-next-line no-await-in-loop
-					await LocalCollection._insertInResultsAsync(query, doc);
+					await this._insertInResultsAsync(query, doc);
 				}
 			}
 		}
@@ -339,7 +488,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 			if (query) {
 				query.distances && query.distances.remove(remove.doc._id);
-				LocalCollection._removeFromResultsSync(query, remove.doc);
+				this._removeFromResultsSync(query, remove.doc);
 			}
 		});
 
@@ -381,7 +530,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			if (query) {
 				query.distances && query.distances.remove(remove.doc._id);
 				// eslint-disable-next-line no-await-in-loop
-				await LocalCollection._removeFromResultsAsync(query, remove.doc);
+				await this._removeFromResultsAsync(query, remove.doc);
 			}
 		}
 		queriesToRecompute.forEach((qid) => {
@@ -894,7 +1043,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		const matchedBefore = this._getMatchedDocAndModify(doc);
 
 		const oldDoc = EJSON.clone(doc);
-		LocalCollection._modify(doc, mod, { arrayIndices });
+		this._modify(doc, mod, { arrayIndices });
 
 		const recomputeQids: Record<string, boolean> = {};
 
@@ -925,11 +1074,11 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 					recomputeQids[qid] = true;
 				}
 			} else if (before && !after) {
-				LocalCollection._removeFromResultsSync(query, doc);
+				this._removeFromResultsSync(query, doc);
 			} else if (!before && after) {
 				this._insertInResultsSync(query, doc);
 			} else if (before && after) {
-				LocalCollection._updateInResultsSync(query, doc, oldDoc);
+				this._updateInResultsSync(query, doc, oldDoc);
 			}
 		}
 		return recomputeQids;
@@ -939,7 +1088,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		const matchedBefore = this._getMatchedDocAndModify(doc);
 
 		const oldDoc = EJSON.clone(doc);
-		LocalCollection._modify(doc, mod, { arrayIndices });
+		this._modify(doc, mod, { arrayIndices });
 
 		const recomputeQids: Record<string, boolean> = {};
 		for (const qid of Object.keys(this.queries)) {
@@ -970,13 +1119,13 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				}
 			} else if (before && !after) {
 				// eslint-disable-next-line no-await-in-loop
-				await LocalCollection._removeFromResultsAsync(query, doc);
+				await this._removeFromResultsAsync(query, doc);
 			} else if (!before && after) {
 				// eslint-disable-next-line no-await-in-loop
-				await LocalCollection._insertInResultsAsync(query, doc);
+				await this._insertInResultsAsync(query, doc);
 			} else if (before && after) {
 				// eslint-disable-next-line no-await-in-loop
-				await LocalCollection._updateInResultsAsync(query, doc, oldDoc);
+				await this._updateInResultsAsync(query, doc, oldDoc);
 			}
 		}
 		return recomputeQids;
@@ -1046,114 +1195,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		this._savedOriginals.set(id, EJSON.clone(doc));
 	}
 
-	// XXX maybe move these into another ObserveHelpers package or something
-
-	// _CachingChangeObserver is an object which receives observeChanges callbacks
-	// and keeps a cache of the current cursor state up to date in this.docs. Users
-	// of this class should read the docs field but not modify it. You should pass
-	// the "applyChange" field as the callbacks to the underlying observeChanges
-	// call. Optionally, you can specify your own observeChanges callbacks which are
-	// invoked immediately before the docs field is updated; this object is made
-	// available as `this` to those callbacks.
-	static _CachingChangeObserver = class _CachingChangeObserver<T extends { _id: string }> {
-		ordered: boolean;
-
-		docs: IIdMap<T['_id'], T> | OrderedDict<T['_id'], T>;
-
-		applyChange: any;
-
-		constructor(options: any = {}) {
-			const orderedFromCallbacks = options.callbacks && LocalCollection._observeChangesCallbacksAreOrdered(options.callbacks);
-
-			if (hasOwn.call(options, 'ordered')) {
-				this.ordered = options.ordered;
-
-				if (options.callbacks && options.ordered !== orderedFromCallbacks) {
-					throw Error("ordered option doesn't match callbacks");
-				}
-			} else if (options.callbacks) {
-				this.ordered = orderedFromCallbacks;
-			} else {
-				throw Error('must provide ordered or callbacks');
-			}
-
-			const callbacks = options.callbacks || {};
-
-			if (this.ordered) {
-				this.docs = new OrderedDict<T['_id'], T>();
-				this.applyChange = {
-					addedBefore: (id: any, fields: any, before: any) => {
-						// Take a shallow copy since the top-level properties can be changed
-						const doc = { ...fields };
-
-						doc._id = id;
-
-						if (callbacks.addedBefore) {
-							callbacks.addedBefore.call(this, id, EJSON.clone(fields), before);
-						}
-
-						// This line triggers if we provide added with movedBefore.
-						if (callbacks.added) {
-							callbacks.added.call(this, id, EJSON.clone(fields));
-						}
-
-						// XXX could `before` be a falsy ID?  Technically
-						// idStringify seems to allow for them -- though
-						// OrderedDict won't call stringify on a falsy arg.
-						(this.docs as OrderedDict<T['_id'], T>).putBefore(id, doc, before || null);
-					},
-					movedBefore: (id: any, before: any) => {
-						if (callbacks.movedBefore) {
-							callbacks.movedBefore.call(this, id, before);
-						}
-
-						(this.docs as OrderedDict<T['_id'], T>).moveBefore(id, before || null);
-					},
-				};
-			} else {
-				this.docs = new IdMap<T['_id'], T>();
-				this.applyChange = {
-					added: (id: any, fields: any) => {
-						// Take a shallow copy since the top-level properties can be changed
-						const doc = { ...fields };
-
-						if (callbacks.added) {
-							callbacks.added.call(this, id, EJSON.clone(fields));
-						}
-
-						doc._id = id;
-
-						(this.docs as IIdMap<T['_id'], T>).set(id, doc);
-					},
-				};
-			}
-
-			// The methods in _IdMap and OrderedDict used by these callbacks are
-			// identical.
-			this.applyChange.changed = (id: any, fields: any) => {
-				const doc = this.docs.get(id);
-
-				if (!doc) {
-					throw new Error(`Unknown id for changed: ${id}`);
-				}
-
-				if (callbacks.changed) {
-					callbacks.changed.call(this, id, EJSON.clone(fields));
-				}
-
-				DiffSequence.applyChanges(doc, fields);
-			};
-
-			this.applyChange.removed = (id: any) => {
-				if (callbacks.removed) {
-					callbacks.removed.call(this, id);
-				}
-
-				this.docs.remove(id);
-			};
-		}
-	};
-
 	// XXX the sorted-query logic below is laughably inefficient. we'll
 	// need to come up with a better datastructure for this.
 	//
@@ -1162,7 +1203,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	// This binary search puts a value between any equal values, and the first
 	// lesser value.
-	static _binarySearch(cmp: any, array: any, value: any) {
+	private _binarySearch(cmp: (a: T, b: T) => number, array: T[], value: T) {
 		let first = 0;
 		let range = array.length;
 
@@ -1180,93 +1221,11 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return first;
 	}
 
-	static _checkSupportedProjection(fields: any) {
-		if (fields !== Object(fields) || Array.isArray(fields)) {
-			throw createMinimongoError('fields option must be an object');
-		}
-
-		Object.keys(fields).forEach((keyPath) => {
-			if (keyPath.split('.').includes('$')) {
-				throw createMinimongoError("Minimongo doesn't support $ operator in projections yet.");
-			}
-
-			const value = fields[keyPath];
-
-			if (typeof value === 'object' && ['$elemMatch', '$meta', '$slice'].some((key) => hasOwn.call(value, key))) {
-				throw createMinimongoError("Minimongo doesn't support operators in projections yet.");
-			}
-
-			if (![1, 0, true, false].includes(value)) {
-				throw createMinimongoError('Projection values should be one of 1, 0, true, or false');
-			}
-		});
-	}
-
-	// Knows how to compile a fields projection to a predicate function.
-	// @returns - Function: a closure that filters out an object according to the
-	//            fields projection rules:
-	//            @param obj - Object: MongoDB-styled document
-	//            @returns - Object: a document with the fields filtered out
-	//                       according to projection rules. Doesn't retain subfields
-	//                       of passed argument.
-	static _compileProjection(fields: any) {
-		LocalCollection._checkSupportedProjection(fields);
-
-		const _idProjection = fields._id === undefined ? true : fields._id;
-		const details = projectionDetails(fields);
-
-		// returns transformed doc according to ruleTree
-		const transform = (doc: any, ruleTree: any): any => {
-			// Special case for "sets"
-			if (Array.isArray(doc)) {
-				return doc.map((subdoc) => transform(subdoc, ruleTree));
-			}
-
-			const result = details.including ? {} : EJSON.clone(doc);
-
-			Object.keys(ruleTree).forEach((key) => {
-				if (doc == null || !hasOwn.call(doc, key)) {
-					return;
-				}
-
-				const rule = ruleTree[key];
-
-				if (rule === Object(rule)) {
-					// For sub-objects/subsets we branch
-					if (doc[key] === Object(doc[key])) {
-						result[key] = transform(doc[key], rule);
-					}
-				} else if (details.including) {
-					// Otherwise we don't even touch this subfield
-					result[key] = EJSON.clone(doc[key]);
-				} else {
-					delete result[key];
-				}
-			});
-
-			return doc != null ? result : doc;
-		};
-
-		return (doc: any) => {
-			const result = transform(doc, details.tree);
-
-			if (_idProjection && hasOwn.call(doc, '_id')) {
-				result._id = doc._id;
-			}
-
-			if (!_idProjection && hasOwn.call(result, '_id')) {
-				delete result._id;
-			}
-
-			return result;
-		};
-	}
-
 	// Calculates the document to insert in case we're doing an upsert and the
 	// selector does not match any elements
 	private _createUpsertDocument(selector: Filter<T>, modifier: UpdateFilter<T>) {
 		const selectorDocument = populateDocumentWithQueryFields(selector);
-		const isModify = LocalCollection._isModificationMod(modifier);
+		const isModify = this._isModificationMod(modifier);
 
 		const newDoc: any = {};
 
@@ -1278,8 +1237,8 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// This double _modify call is made to help with nested properties (see issue
 		// #8631). We do this even if it's a replacement for validation purposes (e.g.
 		// ambiguous id's)
-		LocalCollection._modify(newDoc, { $set: selectorDocument });
-		LocalCollection._modify(newDoc, modifier, { isInsert: true });
+		this._modify(newDoc, { $set: selectorDocument });
+		this._modify(newDoc, modifier, { isInsert: true });
 
 		if (isModify) {
 			return newDoc;
@@ -1294,13 +1253,13 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return replacement;
 	}
 
-	static _findInOrderedResults(query: any, doc: any): number {
+	private _findInOrderedResults(query: Query<T, Options<T>, any>, doc: T): number {
 		if (!query.ordered) {
 			throw new Error("Can't call _findInOrderedResults on unordered query");
 		}
 
-		for (let i = 0; i < query.results.length; i++) {
-			if (query.results[i] === doc) {
+		for (let i = 0; i < (query as OrderedQuery<T, Options<T>, T>).results.length; i++) {
+			if ((query as OrderedQuery<T, Options<T>, T>).results[i] === doc) {
 				return i;
 			}
 		}
@@ -1315,7 +1274,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	// access-controlled update and remove.
 	private _idsMatchedBySelector(selector: Filter<T> | T['_id']): T['_id'][] | null {
 		// Is the selector just an ID?
-		if (LocalCollection._selectorIsId(selector)) {
+		if (_selectorIsId(selector)) {
 			return [selector];
 		}
 
@@ -1326,7 +1285,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// Do we have an _id clause?
 		if (hasOwn.call(selector, '_id')) {
 			// Is the _id clause just an ID?
-			if (LocalCollection._selectorIsId(selector._id)) {
+			if (_selectorIsId(selector._id)) {
 				return [selector._id];
 			}
 
@@ -1335,7 +1294,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				selector._id &&
 				Array.isArray((selector._id as any).$in) &&
 				(selector._id as any).$in.length &&
-				(selector._id as any).$in.every(LocalCollection._selectorIsId)
+				(selector._id as any).$in.every(_selectorIsId)
 			) {
 				return (selector._id as any).$in;
 			}
@@ -1373,7 +1332,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				);
 				(query as OrderedQuery<T, Options<T>, T>).results.push(doc);
 			} else {
-				const i = LocalCollection._insertInSortedList(
+				const i = this._insertInSortedList(
 					(query as OrderedQuery<T, Options<T>, T>).sorter.getComparator({
 						distances: (query as OrderedQuery<T, Options<T>, T>).distances,
 					}),
@@ -1397,49 +1356,58 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 	}
 
-	static async _insertInResultsAsync(query: any, doc: any) {
-		const fields = EJSON.clone(doc);
+	private async _insertInResultsAsync(query: Query<T, Options<T>, T>, doc: T) {
+		const fields: Partial<T> = EJSON.clone(doc);
 
 		delete fields._id;
 
 		if (query.ordered) {
-			if (!query.sorter) {
-				await query.addedBefore(doc._id, query.projectionFn(fields), null);
-				query.results.push(doc);
+			if (!(query as OrderedQuery<T, Options<T>, T>).sorter) {
+				await (query as OrderedQuery<T, Options<T>, T>).addedBefore(
+					doc._id,
+					(query as OrderedQuery<T, Options<T>, T>).projectionFn(fields),
+					null,
+				);
+				(query as OrderedQuery<T, Options<T>, T>).results.push(doc);
 			} else {
-				const i = LocalCollection._insertInSortedList(query.sorter.getComparator({ distances: query.distances }), query.results, doc);
+				const i = this._insertInSortedList(
+					(query as OrderedQuery<T, Options<T>, T>).sorter.getComparator({
+						distances: (query as OrderedQuery<T, Options<T>, T>).distances,
+					}),
+					(query as OrderedQuery<T, Options<T>, T>).results,
+					doc,
+				);
 
-				let next = query.results[i + 1];
-				if (next) {
-					next = next._id;
-				} else {
-					next = null;
-				}
+				const next = (query as OrderedQuery<T, Options<T>, T>).results[i + 1]?._id ?? null;
 
-				await query.addedBefore(doc._id, query.projectionFn(fields), next);
+				await (query as OrderedQuery<T, Options<T>, T>).addedBefore(
+					doc._id,
+					(query as OrderedQuery<T, Options<T>, T>).projectionFn(fields),
+					next,
+				);
 			}
 
-			await query.added(doc._id, query.projectionFn(fields));
+			await (query as OrderedQuery<T, Options<T>, T>).added(doc._id, (query as OrderedQuery<T, Options<T>, T>).projectionFn(fields));
 		} else {
-			await query.added(doc._id, query.projectionFn(fields));
-			query.results.set(doc._id, doc);
+			await (query as UnorderedQuery<T, Options<T>, T>).added(doc._id, (query as UnorderedQuery<T, Options<T>, T>).projectionFn(fields));
+			(query as UnorderedQuery<T, Options<T>, T>).results.set(doc._id, doc);
 		}
 	}
 
-	static _insertInSortedList(cmp: any, array: any, value: any) {
+	private _insertInSortedList(cmp: (a: T, b: T) => number, array: T[], value: T) {
 		if (array.length === 0) {
 			array.push(value);
 			return 0;
 		}
 
-		const i = LocalCollection._binarySearch(cmp, array, value);
+		const i = this._binarySearch(cmp, array, value);
 
 		array.splice(i, 0, value);
 
 		return i;
 	}
 
-	static _isModificationMod(mod: any) {
+	private _isModificationMod(mod: UpdateFilter<T>) {
 		let isModify = false;
 		let isReplace = false;
 
@@ -1458,13 +1426,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return isModify;
 	}
 
-	// XXX maybe this should be EJSON.isObject, though EJSON doesn't know about
-	// RegExp
-	// XXX note that _type(undefined) === 3!!!!
-	static _isPlainObject(x: any): x is Record<string, any> {
-		return x && _f._type(x) === 3;
-	}
-
 	// XXX need a strategy for passing the binding of $ into this
 	// function, from the compiled selector
 	//
@@ -1477,8 +1438,8 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	//   - isInsert is set when _modify is being called to compute the document to
 	//     insert as part of an upsert operation. We use this primarily to figure
 	//     out when to set the fields in $setOnInsert, if present.
-	static _modify(doc: any, modifier: any, options: any = {}) {
-		if (!LocalCollection._isPlainObject(modifier)) {
+	private _modify(doc: T, modifier: UpdateFilter<T>, options: { isInsert?: boolean; arrayIndices?: unknown } = {}) {
+		if (!_isPlainObject(modifier)) {
 			throw createMinimongoError('Modifier must be an object');
 		}
 
@@ -1486,7 +1447,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		modifier = EJSON.clone(modifier);
 
 		const isModifier = isOperatorObject(modifier);
-		const newDoc = isModifier ? EJSON.clone(doc) : modifier;
+		const newDoc = isModifier ? EJSON.clone(doc) : (modifier as T);
 
 		if (isModifier) {
 			// apply modifiers to the doc.
@@ -1545,220 +1506,44 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			// work right in Opera. Deleting from a doc while iterating over it
 			// would sometimes cause opera to skip some keys.
 			if (key !== '_id') {
-				delete doc[key];
+				delete doc[key as keyof T];
 			}
 		});
 
 		Object.keys(newDoc).forEach((key) => {
-			doc[key] = newDoc[key];
+			doc[key as keyof T] = newDoc[key as keyof T];
 		});
 	}
 
-	static _observeFromObserveChanges<T extends { _id: string }, TCursor extends Cursor<any, any>>(
-		cursor: TCursor,
-		observeCallbacks: ObserveCallbacks<T>,
-	) {
-		const transform = cursor.getTransform() || ((doc: T) => doc);
-		let suppressed = !!observeCallbacks._suppress_initial;
-
-		let observeChangesCallbacks: ObserveChangesCallbacks<T>;
-		if (LocalCollection._observeCallbacksAreOrdered(observeCallbacks)) {
-			// The "_no_indices" option sets all index arguments to -1 and skips the
-			// linear scans required to generate them.  This lets observers that don't
-			// need absolute indices benefit from the other features of this API --
-			// relative order, transforms, and applyChanges -- without the speed hit.
-			const indices = !observeCallbacks._no_indices;
-
-			observeChangesCallbacks = {
-				addedBefore(id, fields, before) {
-					const check = suppressed || !(observeCallbacks.addedAt || observeCallbacks.added);
-					if (check) {
-						return;
-					}
-
-					const doc = transform(Object.assign(fields, { _id: id }));
-
-					if (observeCallbacks.addedAt) {
-						observeCallbacks.addedAt(
-							doc,
-							// eslint-disable-next-line no-nested-ternary
-							indices ? (before ? (this.docs as OrderedDict<T['_id'], T>).indexOf(before) : this.docs.size()) : -1,
-							before,
-						);
-					} else {
-						observeCallbacks.added!(doc);
-					}
-				},
-				changed(id, fields) {
-					if (!(observeCallbacks.changedAt || observeCallbacks.changed)) {
-						return;
-					}
-
-					const doc = EJSON.clone(this.docs.get(id));
-					if (!doc) {
-						throw new Error(`Unknown id for changed: ${id}`);
-					}
-
-					const oldDoc = transform(EJSON.clone(doc));
-
-					DiffSequence.applyChanges(doc, fields);
-
-					if (observeCallbacks.changedAt) {
-						observeCallbacks.changedAt(transform(doc), oldDoc, indices ? (this.docs as OrderedDict<T['_id'], T>).indexOf(id) : -1);
-					} else {
-						observeCallbacks.changed!(transform(doc), oldDoc);
-					}
-				},
-				movedBefore(id, before) {
-					if (!observeCallbacks.movedTo) {
-						return;
-					}
-
-					const from = indices ? (this.docs as OrderedDict<T['_id'], T>).indexOf(id) : -1;
-					// eslint-disable-next-line no-nested-ternary
-					let to = indices ? (before ? (this.docs as OrderedDict<T['_id'], T>).indexOf(before) : this.docs.size()) : -1;
-
-					// When not moving backwards, adjust for the fact that removing the
-					// document slides everything back one slot.
-					if (to > from) {
-						--to;
-					}
-
-					observeCallbacks.movedTo(transform(EJSON.clone(this.docs.get(id))), from, to, before || null);
-				},
-				removed(id) {
-					if (!(observeCallbacks.removedAt || observeCallbacks.removed)) {
-						return;
-					}
-
-					// technically maybe there should be an EJSON.clone here, but it's about
-					// to be removed from this.docs!
-					const doc = transform(this.docs.get(id));
-
-					if (observeCallbacks.removedAt) {
-						observeCallbacks.removedAt(doc, indices ? (this.docs as OrderedDict<T['_id'], T>).indexOf(id) : -1);
-					} else {
-						observeCallbacks.removed!(doc);
-					}
-				},
-			};
-		} else {
-			observeChangesCallbacks = {
-				added(id, fields) {
-					if (!suppressed && observeCallbacks.added) {
-						observeCallbacks.added(transform(Object.assign(fields, { _id: id })));
-					}
-				},
-				changed(id, fields) {
-					if (observeCallbacks.changed) {
-						const oldDoc = this.docs.get(id);
-						const doc = EJSON.clone(oldDoc);
-
-						DiffSequence.applyChanges(doc!, fields);
-
-						observeCallbacks.changed(transform(doc), transform(EJSON.clone(oldDoc)));
-					}
-				},
-				removed(id) {
-					if (observeCallbacks.removed) {
-						observeCallbacks.removed(transform(this.docs.get(id)));
-					}
-				},
-			};
-		}
-
-		const changeObserver = new LocalCollection._CachingChangeObserver({
-			callbacks: observeChangesCallbacks,
-		});
-
-		// CachingChangeObserver clones all received input on its callbacks
-		// So we can mark it as safe to reduce the ejson clones.
-		// This is tested by the `mongo-livedata - (extended) scribbling` tests
-		changeObserver.applyChange._fromObserve = true;
-		const handle = cursor.observeChanges(changeObserver.applyChange);
-
-		// If needed, re-enable callbacks as soon as the initial batch is ready.
-		const setSuppressed = (h: any) => {
-			if (h.isReady) suppressed = false;
-			// eslint-disable-next-line no-return-assign
-			else h.isReadyPromise?.then(() => (suppressed = false));
-		};
-		// When we call cursor.observeChanges() it can be the on from
-		// the mongo package (instead of the minimongo one) and it doesn't have isReady and isReadyPromise
-		if (Meteor._isPromise(handle)) {
-			handle.then(setSuppressed);
-		} else {
-			setSuppressed(handle);
-		}
-		return handle;
-	}
-
-	static _observeCallbacksAreOrdered = (callbacks: any) => {
-		if (callbacks.added && callbacks.addedAt) {
-			throw new Error('Please specify only one of added() and addedAt()');
-		}
-
-		if (callbacks.changed && callbacks.changedAt) {
-			throw new Error('Please specify only one of changed() and changedAt()');
-		}
-
-		if (callbacks.removed && callbacks.removedAt) {
-			throw new Error('Please specify only one of removed() and removedAt()');
-		}
-
-		return !!(callbacks.addedAt || callbacks.changedAt || callbacks.movedTo || callbacks.removedAt);
-	};
-
-	static _observeChangesCallbacksAreOrdered = <T extends { _id: string }>(callbacks: ObserveChangesCallbacks<T>) => {
-		if (callbacks.added && callbacks.addedBefore) {
-			throw new Error('Please specify only one of added() and addedBefore()');
-		}
-
-		return !!(callbacks.addedBefore || callbacks.movedBefore);
-	};
-
-	static _removeFromResultsSync = (query: any, doc: any) => {
+	private _removeFromResultsSync(query: Query<T, Options<T>, T>, doc: T) {
 		if (query.ordered) {
-			const i = LocalCollection._findInOrderedResults(query, doc);
+			const i = this._findInOrderedResults(query, doc);
 
-			query.removed(doc._id);
-			query.results.splice(i, 1);
+			(query as OrderedQuery<T, Options<T>, any>).removed(doc._id);
+			(query as OrderedQuery<T, Options<T>, any>).results.splice(i, 1);
 		} else {
 			const id = doc._id; // in case callback mutates doc
 
-			query.removed(doc._id);
-			query.results.remove(id);
+			(query as UnorderedQuery<T, Options<T>, any>).removed(doc._id);
+			(query as UnorderedQuery<T, Options<T>, any>).results.remove(id);
 		}
-	};
+	}
 
-	static _removeFromResultsAsync = async (query: any, doc: any) => {
+	private async _removeFromResultsAsync(query: Query<T, Options<T>, T>, doc: T) {
 		if (query.ordered) {
-			const i = LocalCollection._findInOrderedResults(query, doc);
+			const i = this._findInOrderedResults(query, doc);
 
-			await query.removed(doc._id);
-			query.results.splice(i, 1);
+			await (query as OrderedQuery<T, Options<T>, any>).removed(doc._id);
+			(query as OrderedQuery<T, Options<T>, any>).results.splice(i, 1);
 		} else {
 			const id = doc._id; // in case callback mutates doc
 
-			await query.removed(doc._id);
-			query.results.remove(id);
+			await (query as UnorderedQuery<T, Options<T>, any>).removed(doc._id);
+			(query as UnorderedQuery<T, Options<T>, any>).results.remove(id);
 		}
-	};
-
-	// Is this selector just shorthand for lookup by _id?
-	static _selectorIsId(selector: unknown): selector is string | number {
-		return typeof selector === 'number' || typeof selector === 'string';
 	}
 
-	// Is the selector just lookup by _id (shorthand or not)?
-	static _selectorIsIdPerhapsAsObject<T extends { _id: string }>(selector: unknown): selector is T['_id'] | Pick<T, '_id'> {
-		return (
-			LocalCollection._selectorIsId(selector) ||
-			(LocalCollection._selectorIsId(selector && (selector as { _id?: string })._id) && Object.keys(selector as object).length === 1)
-		);
-	}
-
-	static _updateInResultsSync = (query: any, doc: any, oldDoc: any) => {
+	private _updateInResultsSync(query: Query<T, Options<T>, T>, doc: T, oldDoc: T) {
 		if (doc._id !== oldDoc._id) {
 			throw new Error("Can't change a doc's _id while updating");
 		}
@@ -1768,17 +1553,17 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		if (!query.ordered) {
 			if (Object.keys(changedFields).length) {
-				query.changed(doc._id, changedFields);
-				query.results.set(doc._id, doc);
+				(query as UnorderedQuery<T, Options<T>, any>).changed(doc._id, changedFields);
+				(query as UnorderedQuery<T, Options<T>, any>).results.set(doc._id, doc);
 			}
 
 			return;
 		}
 
-		const oldIdx = LocalCollection._findInOrderedResults(query, doc);
+		const oldIdx = this._findInOrderedResults(query, doc);
 
 		if (Object.keys(changedFields).length) {
-			query.changed(doc._id, changedFields);
+			(query as OrderedQuery<T, Options<T>, any>).changed(doc._id, changedFields);
 		}
 
 		if (!query.sorter) {
@@ -1786,23 +1571,22 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 
 		// just take it out and put it back in again, and see if the index changes
-		query.results.splice(oldIdx, 1);
+		(query as OrderedQuery<T, Options<T>, any>).results.splice(oldIdx, 1);
 
-		const newIdx = LocalCollection._insertInSortedList(query.sorter.getComparator({ distances: query.distances }), query.results, doc);
+		const newIdx = this._insertInSortedList(
+			(query as OrderedQuery<T, Options<T>, any>).sorter.getComparator({ distances: query.distances }),
+			(query as OrderedQuery<T, Options<T>, any>).results,
+			doc,
+		);
 
 		if (oldIdx !== newIdx) {
-			let next = query.results[newIdx + 1];
-			if (next) {
-				next = next._id;
-			} else {
-				next = null;
-			}
+			const next = (query as OrderedQuery<T, Options<T>, any>).results[newIdx + 1]?._id ?? null;
 
 			query.movedBefore && query.movedBefore(doc._id, next);
 		}
-	};
+	}
 
-	static async _updateInResultsAsync(query: any, doc: any, oldDoc: any) {
+	private async _updateInResultsAsync(query: Query<T, Options<T>, T>, doc: T, oldDoc: T) {
 		if (doc._id !== oldDoc._id) {
 			throw new Error("Can't change a doc's _id while updating");
 		}
@@ -1812,17 +1596,17 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		if (!query.ordered) {
 			if (Object.keys(changedFields).length) {
-				await query.changed(doc._id, changedFields);
-				query.results.set(doc._id, doc);
+				await (query as UnorderedQuery<T, Options<T>, any>).changed(doc._id, changedFields);
+				(query as UnorderedQuery<T, Options<T>, any>).results.set(doc._id, doc);
 			}
 
 			return;
 		}
 
-		const oldIdx = LocalCollection._findInOrderedResults(query, doc);
+		const oldIdx = this._findInOrderedResults(query, doc);
 
 		if (Object.keys(changedFields).length) {
-			await query.changed(doc._id, changedFields);
+			await (query as OrderedQuery<T, Options<T>, any>).changed(doc._id, changedFields);
 		}
 
 		if (!query.sorter) {
@@ -1830,17 +1614,16 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 
 		// just take it out and put it back in again, and see if the index changes
-		query.results.splice(oldIdx, 1);
+		(query as OrderedQuery<T, Options<T>, any>).results.splice(oldIdx, 1);
 
-		const newIdx = LocalCollection._insertInSortedList(query.sorter.getComparator({ distances: query.distances }), query.results, doc);
+		const newIdx = this._insertInSortedList(
+			(query as OrderedQuery<T, Options<T>, any>).sorter.getComparator({ distances: query.distances }),
+			(query as OrderedQuery<T, Options<T>, any>).results,
+			doc,
+		);
 
 		if (oldIdx !== newIdx) {
-			let next = query.results[newIdx + 1];
-			if (next) {
-				next = next._id;
-			} else {
-				next = null;
-			}
+			const next = (query as OrderedQuery<T, Options<T>, any>).results[newIdx + 1]?._id ?? null;
 
 			query.movedBefore && (await query.movedBefore(doc._id, next));
 		}

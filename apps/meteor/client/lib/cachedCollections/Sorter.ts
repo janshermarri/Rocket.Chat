@@ -1,6 +1,6 @@
 import type { Filter, Sort } from 'mongodb';
 
-import type { IIdMap } from './IIdMap';
+import type { IIdMap } from './IdMap';
 import { Matcher } from './Matcher';
 import { _f, expandArraysInBranches, hasOwn, makeLookupFunction } from './common';
 

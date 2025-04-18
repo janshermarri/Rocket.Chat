@@ -1,6 +1,6 @@
 import { EJSON } from 'meteor/ejson';
 
-import type { IIdMap } from './IIdMap';
+import type { IIdMap } from './IdMap';
 import { hasOwn } from './common';
 
 function isObjEmpty(obj: Record<string, unknown>): boolean {
