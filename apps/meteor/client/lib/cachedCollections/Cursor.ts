@@ -4,7 +4,7 @@ import type { Filter } from 'mongodb';
 
 import { DiffSequence } from './DiffSequence';
 import { IdMap } from './IdMap';
-import type { LocalCollection } from './LocalCollection';
+import type { LocalCollection, QueryId } from './LocalCollection';
 import { Matcher } from './Matcher';
 import type { FieldSpecifier, Options, Transform } from './MinimongoCollection';
 import { ObserveHandle } from './ObserveHandle';
@@ -50,7 +50,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 		if (this._selectorIsIdPerhapsAsObject(selector)) {
 			// stash for fast _id and { _id }
-			this._selectorId = hasOwn.call(selector, '_id') ? (selector as { _id?: string })._id : selector;
+			this._selectorId = hasOwn.call(selector, '_id') ? (selector as { _id?: T['_id'] })._id : selector;
 		} else {
 			this._selectorId = undefined;
 
@@ -371,7 +371,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 					sorter: null,
 				};
 
-		let qid: string;
+		let qid: QueryId;
 
 		// Non-reactive queries call added[Before] and then never call anything
 		// else.
@@ -424,7 +424,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 		if (!options._suppress_initial && !this.collection.paused) {
 			const handler = (doc: T) => {
-				const fields: Partial<T> & { _id?: string } = EJSON.clone(doc);
+				const fields: Partial<T> & { _id?: T['_id'] } = EJSON.clone(doc);
 
 				delete fields._id;
 
@@ -873,7 +873,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	private _selectorIsIdPerhapsAsObject(selector: unknown): selector is T['_id'] | Pick<T, '_id'> {
 		return (
 			_selectorIsId(selector) ||
-			(_selectorIsId(selector && (selector as { _id?: string })._id) && Object.keys(selector as object).length === 1)
+			(_selectorIsId(selector && (selector as { _id?: T['_id'] })._id) && Object.keys(selector as object).length === 1)
 		);
 	}
 

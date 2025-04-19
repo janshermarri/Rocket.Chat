@@ -23,9 +23,11 @@ import {
 	_selectorIsId,
 } from './common';
 
+export type QueryId = `${number}` & { __brand: 'QueryId' };
+
 interface ILocalCollection<T extends { _id: string }> {
 	next_qid: number;
-	queries: Record<string, Query<T, Options<T>, any>>;
+	queries: Record<QueryId, Query<T, Options<T>, any>>;
 	paused: boolean;
 	find(selector?: Filter<T> | T['_id']): Cursor<T, Options<T>, T>;
 	find<O extends Options<T>>(selector?: Filter<T> | T['_id'], options?: O): Cursor<T, O, DispatchTransform<O['transform'], T, T>>;
@@ -34,28 +36,28 @@ interface ILocalCollection<T extends { _id: string }> {
 		selector?: Filter<T> | T['_id'],
 		options?: O,
 	): DispatchTransform<O['transform'], T, T> | undefined;
-	prepareInsert(doc: T): string;
-	insert(doc: T, callback?: (error: Error | null, id: string) => void): string;
+	prepareInsert(doc: T): T['_id'];
+	insert(doc: T, callback?: (error: Error | null, id: T['_id']) => void): T['_id'];
 	pauseObservers(): void;
 	clearResultQueries(callback: (error: Error | null, result: number) => void): number;
 	prepareRemove(selector: Filter<T>): {
-		queriesToRecompute: string[];
-		queryRemove: { qid: string; doc: T }[];
+		queriesToRecompute: QueryId[];
+		queryRemove: { qid: QueryId; doc: T }[];
 		remove: T['_id'][];
 	};
 	remove(selector: Filter<T>, callback?: (error: Error | null, result: number) => void): number;
 	resumeObserversClient(): void;
 	retrieveOriginals(): IdMap<T['_id'], T | undefined>;
 	saveOriginals(): void;
-	prepareUpdate(selector: Filter<T>): Record<string, IdMap<T['_id'], T> | T[]>;
+	prepareUpdate(selector: Filter<T>): Record<QueryId, IdMap<T['_id'], T> | T[]>;
 	finishUpdate(params: {
 		options: { _returnObject?: boolean };
 		updateCount: number;
-		callback: (error: Error | null, result: number | { numberAffected: number; insertedId?: string }) => void;
-		insertedId?: string;
+		callback: (error: Error | null, result: number | { numberAffected: number; insertedId?: T['_id'] }) => void;
+		insertedId?: T['_id'];
 		selector?: unknown;
 		mod?: UpdateFilter<T>;
-	}): { numberAffected: number; insertedId?: string } | number;
+	}): { numberAffected: number; insertedId?: T['_id'] } | number;
 	update(
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
@@ -65,24 +67,24 @@ interface ILocalCollection<T extends { _id: string }> {
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
-	): { numberAffected: number; insertedId?: string } | number;
+	): { numberAffected: number; insertedId?: T['_id'] } | number;
 	update(
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
-		options: { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean } | null,
+		options: { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean } | null,
 		callback: (
 			error: Error | null,
 			result:
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
-	): { numberAffected: number; insertedId?: string } | number;
+	): { numberAffected: number; insertedId?: T['_id'] } | number;
 	upsert(
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
@@ -92,24 +94,24 @@ interface ILocalCollection<T extends { _id: string }> {
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
-	): { numberAffected: number; insertedId?: string } | number;
+	): { numberAffected: number; insertedId?: T['_id'] } | number;
 	upsert(
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
-		options: { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean } | null,
+		options: { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean } | null,
 		callback: (
 			error: Error | null,
 			result:
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
-	): { numberAffected: number; insertedId?: string } | number;
+	): { numberAffected: number; insertedId?: T['_id'] } | number;
 	countDocuments(selector?: Filter<T>, options?: CountDocumentsOptions): Promise<number>;
 	estimatedDocumentCount(options: CountDocumentsOptions): Promise<number>;
 	findOneAsync(selector?: Filter<T> | T['_id']): Promise<T | undefined>;
@@ -117,7 +119,7 @@ interface ILocalCollection<T extends { _id: string }> {
 		selector?: Filter<T> | T['_id'],
 		options?: O,
 	): Promise<DispatchTransform<O['transform'], T, T> | undefined>;
-	insertAsync(doc: T, callback?: (error: Error | null, id: string) => void): Promise<string>;
+	insertAsync(doc: T, callback?: (error: Error | null, id: T['_id']) => void): Promise<T['_id']>;
 	resumeObserversServer(): Promise<void>;
 	updateAsync(
 		selector: Filter<T>,
@@ -128,24 +130,24 @@ interface ILocalCollection<T extends { _id: string }> {
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
-	): Promise<{ numberAffected: number; insertedId?: string } | number>;
+	): Promise<{ numberAffected: number; insertedId?: T['_id'] } | number>;
 	updateAsync(
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
-		options: { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean } | null,
+		options: { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean } | null,
 		callback: (
 			error: Error | null,
 			result:
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
-	): Promise<{ numberAffected: number; insertedId?: string } | number>;
+	): Promise<{ numberAffected: number; insertedId?: T['_id'] } | number>;
 	upsertAsync(
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
@@ -155,24 +157,24 @@ interface ILocalCollection<T extends { _id: string }> {
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
-	): Promise<{ numberAffected: number; insertedId?: string } | number>;
+	): Promise<{ numberAffected: number; insertedId?: T['_id'] } | number>;
 	upsertAsync(
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
-		options: { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean } | null,
+		options: { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean } | null,
 		callback: (
 			error: Error | null,
 			result:
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
-	): Promise<{ numberAffected: number; insertedId?: string } | number>;
+	): Promise<{ numberAffected: number; insertedId?: T['_id'] } | number>;
 }
 
 export class LocalCollection<T extends { _id: string }> implements ILocalCollection<T> {
@@ -189,7 +191,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	//  resultsSnapshot: snapshot of results. null if not paused.
 	//  cursor: Cursor object for the query.
 	//  selector, sorter, (callbacks): functions
-	queries: Record<string, Query<T, Options<T>, any>> = Object.create(null);
+	queries: Record<QueryId, Query<T, Options<T>, any>> = Object.create(null);
 
 	// null if not saving originals; an IdMap from id to original document value
 	// if saving originals. See comments before saveOriginals().
@@ -249,7 +251,11 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	claimNextQueryId() {
-		return `${this.next_qid++}`;
+		return `${this.next_qid++}` as QueryId;
+	}
+
+	getAllQueryIds() {
+		return Object.keys(this.queries) as QueryId[];
 	}
 
 	countDocuments(selector?: Filter<T>, options?: CountDocumentsOptions) {
@@ -291,13 +297,13 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	// XXX possibly enforce that 'undefined' does not appear (we assume
 	// this in our handling of null and $exists)
-	insert(doc: T, callback?: (error: Error | null, id: string) => void) {
+	insert(doc: T, callback?: (error: Error | null, id: T['_id']) => void) {
 		doc = EJSON.clone(doc);
 		const id = this.prepareInsert(doc);
 		const queriesToRecompute = [];
 
 		// trigger live queries that match
-		for (const qid of Object.keys(this.queries)) {
+		for (const qid of this.getAllQueryIds()) {
 			const query = this.queries[qid];
 
 			if (query.dirty) {
@@ -335,13 +341,13 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return id;
 	}
 
-	async insertAsync(doc: T, callback?: (error: Error | null, id: string) => void) {
+	async insertAsync(doc: T, callback?: (error: Error | null, id: T['_id']) => void) {
 		doc = EJSON.clone(doc);
 		const id = this.prepareInsert(doc);
-		const queriesToRecompute = [];
+		const queriesToRecompute: QueryId[] = [];
 
 		// trigger live queries that match
-		for (const qid of Object.keys(this.queries)) {
+		for (const qid of this.getAllQueryIds()) {
 			const query = this.queries[qid];
 
 			if (query.dirty) {
@@ -392,7 +398,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		this.paused = true;
 
 		// Take a snapshot of the query results for each query.
-		Object.keys(this.queries).forEach((qid) => {
+		this.getAllQueryIds().forEach((qid) => {
 			const query = this.queries[qid];
 			query.resultsSnapshot = EJSON.clone(query.results);
 		});
@@ -403,7 +409,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		this.clear();
 
-		Object.keys(this.queries).forEach((qid) => {
+		this.getAllQueryIds().forEach((qid) => {
 			const query = this.queries[qid];
 
 			if (query.ordered) {
@@ -432,13 +438,13 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			}
 		});
 
-		const queriesToRecompute: string[] = [];
-		const queryRemove: { qid: string; doc: T }[] = [];
+		const queriesToRecompute: QueryId[] = [];
+		const queryRemove: { qid: QueryId; doc: T }[] = [];
 
 		for (const removeId of remove) {
 			const removeDoc = this.get(removeId)!;
 
-			Object.keys(this.queries).forEach((qid) => {
+			this.getAllQueryIds().forEach((qid) => {
 				const query = this.queries[qid];
 
 				if (query.dirty) {
@@ -557,7 +563,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// observer methods won't actually fire when we trigger them.
 		this.paused = false;
 
-		Object.keys(this.queries).forEach((qid) => {
+		this.getAllQueryIds().forEach((qid) => {
 			const query = this.queries[qid];
 
 			if (query.dirty) {
@@ -621,14 +627,14 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// it. (We don't need to save the original results of paused queries because
 		// they already have a resultsSnapshot and we won't be diffing in
 		// _recomputeResults.)
-		const qidToOriginalResults: Record<string, IdMap<T['_id'], T> | T[]> = {};
+		const qidToOriginalResults: Record<QueryId, IdMap<T['_id'], T> | T[]> = {};
 
 		// We should only clone each document once, even if it appears in multiple
 		// queries
 		const docMap = new IdMap<T['_id'], T>();
 		const idsMatched = this._idsMatchedBySelector(selector);
 
-		Object.keys(this.queries).forEach((qid) => {
+		this.getAllQueryIds().forEach((qid) => {
 			const query = this.queries[qid];
 
 			if ((query.cursor.skip || query.cursor.limit) && !this.paused) {
@@ -677,15 +683,15 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}: {
 		options: { _returnObject?: boolean };
 		updateCount: number;
-		callback: (error: Error | null, result: number | { numberAffected: number; insertedId?: string }) => void;
-		insertedId?: string;
+		callback: (error: Error | null, result: number | { numberAffected: number; insertedId?: T['_id'] }) => void;
+		insertedId?: T['_id'];
 		selector?: unknown;
 		mod?: unknown;
 	}) {
 		// Return the number of affected documents, or in the upsert case, an object
 		// containing the number of affected docs and the id of the doc that was
 		// inserted, if any.
-		let result: { numberAffected: number; insertedId?: string } | number;
+		let result: { numberAffected: number; insertedId?: T['_id'] } | number;
 		if (options._returnObject) {
 			result = { numberAffected: updateCount };
 
@@ -711,7 +717,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
 		options:
-			| { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }
+			| { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }
 			| null
 			| ((
 					error: Error | null,
@@ -719,7 +725,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 						| number
 						| {
 								numberAffected: number;
-								insertedId?: string;
+								insertedId?: T['_id'];
 						  },
 			  ) => void),
 		callback?: (
@@ -728,7 +734,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
 	) {
@@ -745,7 +751,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		const qidToOriginalResults = this.prepareUpdate(selector);
 
-		let recomputeQids: Record<string, boolean> = {};
+		let recomputeQids: Record<QueryId, boolean> = {};
 
 		let updateCount = 0;
 
@@ -759,7 +765,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 				++updateCount;
 
-				if (!(options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).multi) {
+				if (!(options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }).multi) {
 					return false; // break
 				}
 			}
@@ -767,7 +773,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			return true;
 		});
 
-		Object.keys(recomputeQids).forEach((qid) => {
+		(Object.keys(recomputeQids) as QueryId[]).forEach((qid) => {
 			const query = this.queries[qid];
 
 			if (query) {
@@ -781,10 +787,10 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// it's time to do an insert. Figure out what document we are inserting, and
 		// generate an id for it.
 		let insertedId;
-		if (updateCount === 0 && (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).upsert) {
+		if (updateCount === 0 && (options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }).upsert) {
 			const doc = this._createUpsertDocument(selector, mod);
-			if (!doc._id && (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).insertedId) {
-				doc._id = (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).insertedId;
+			if (!doc._id && (options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }).insertedId) {
+				doc._id = (options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }).insertedId;
 			}
 
 			insertedId = await this.insertAsync(doc);
@@ -792,7 +798,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 
 		return this.finishUpdate({
-			options: options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean },
+			options: options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean },
 			insertedId,
 			updateCount,
 			callback: callback!,
@@ -805,7 +811,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
 		options:
-			| { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }
+			| { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }
 			| null
 			| ((
 					error: Error | null,
@@ -813,7 +819,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 						| number
 						| {
 								numberAffected: number;
-								insertedId?: string;
+								insertedId?: T['_id'];
 						  },
 			  ) => void),
 		callback?: (
@@ -822,7 +828,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
 	) {
@@ -833,7 +839,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 					| number
 					| {
 							numberAffected: number;
-							insertedId?: string;
+							insertedId?: T['_id'];
 					  },
 			) => void;
 			options = null;
@@ -847,7 +853,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		const qidToOriginalResults = this.prepareUpdate(selector);
 
-		let recomputeQids: Record<string, boolean> = {};
+		let recomputeQids: Record<QueryId, boolean> = {};
 
 		let updateCount = 0;
 
@@ -861,7 +867,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 				++updateCount;
 
-				if (!(options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).multi) {
+				if (!(options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }).multi) {
 					return false; // break
 				}
 			}
@@ -869,7 +875,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			return true;
 		});
 
-		Object.keys(recomputeQids).forEach((qid) => {
+		(Object.keys(recomputeQids) as QueryId[]).forEach((qid) => {
 			const query = this.queries[qid];
 			if (query) {
 				this._recomputeResults(query, qidToOriginalResults[qid]);
@@ -881,10 +887,10 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		// If we are doing an upsert, and we didn't modify any documents yet, then
 		// it's time to do an insert. Figure out what document we are inserting, and
 		// generate an id for it.
-		if (updateCount === 0 && (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).upsert) {
+		if (updateCount === 0 && (options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }).upsert) {
 			const doc = this._createUpsertDocument(selector, mod);
-			if (!doc._id && (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).insertedId) {
-				doc._id = (options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }).insertedId;
+			if (!doc._id && (options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }).insertedId) {
+				doc._id = (options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }).insertedId;
 			}
 
 			this.insert(doc);
@@ -892,7 +898,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		}
 
 		return this.finishUpdate({
-			options: options as { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean },
+			options: options as { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean },
 			updateCount,
 			callback: callback!,
 			selector,
@@ -907,7 +913,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
 		options:
-			| { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }
+			| { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }
 			| null
 			| ((
 					error: Error | null,
@@ -915,7 +921,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 						| number
 						| {
 								numberAffected: number;
-								insertedId?: string;
+								insertedId?: T['_id'];
 						  },
 			  ) => void),
 		callback?: (
@@ -924,7 +930,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
 	) {
@@ -940,7 +946,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		selector: Filter<T>,
 		mod: UpdateFilter<T>,
 		options:
-			| { multi?: boolean; upsert?: boolean; insertedId?: string; _returnObject?: boolean }
+			| { multi?: boolean; upsert?: boolean; insertedId?: T['_id']; _returnObject?: boolean }
 			| null
 			| ((
 					error: Error | null,
@@ -948,7 +954,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 						| number
 						| {
 								numberAffected: number;
-								insertedId?: string;
+								insertedId?: T['_id'];
 						  },
 			  ) => void),
 		callback?: (
@@ -957,7 +963,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				| number
 				| {
 						numberAffected: number;
-						insertedId?: string;
+						insertedId?: T['_id'];
 				  },
 		) => void,
 	) {
@@ -1017,7 +1023,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	_getMatchedDocAndModify(doc: T) {
 		const matchedBefore: any = {};
 
-		Object.keys(this.queries).forEach((qid) => {
+		this.getAllQueryIds().forEach((qid) => {
 			const query = this.queries[qid];
 
 			if (query.dirty) {
@@ -1042,9 +1048,9 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		const oldDoc = EJSON.clone(doc);
 		this._modify(doc, mod, { arrayIndices });
 
-		const recomputeQids: Record<string, boolean> = {};
+		const recomputeQids: Record<QueryId, boolean> = {};
 
-		for (const qid of Object.keys(this.queries)) {
+		for (const qid of this.getAllQueryIds()) {
 			const query = this.queries[qid];
 
 			if (query.dirty) {
@@ -1087,8 +1093,8 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		const oldDoc = EJSON.clone(doc);
 		this._modify(doc, mod, { arrayIndices });
 
-		const recomputeQids: Record<string, boolean> = {};
-		for (const qid of Object.keys(this.queries)) {
+		const recomputeQids: Record<QueryId, boolean> = {};
+		for (const qid of this.getAllQueryIds()) {
 			const query = this.queries[qid];
 
 			if (query.dirty) {
