@@ -175,16 +175,12 @@ interface ILocalCollection<T extends { _id: string }> {
 	): Promise<{ numberAffected: number; insertedId?: string } | number>;
 }
 
-// XXX type checking on selectors (graceful error if malformed)
-
-// LocalCollection: a set of documents that supports queries and modifiers.
 export class LocalCollection<T extends { _id: string }> implements ILocalCollection<T> {
-	// _id -> document (also containing id)
-	readonly _docs = new IdMap<T['_id'], T>();
+	private readonly _docs = new IdMap<T['_id'], T>();
 
 	readonly _observeQueue = new SynchronousQueue();
 
-	next_qid = 1; // live query id generator
+	next_qid = 1;
 
 	// qid -> live query object. keys:
 	//  ordered: bool. ordered queries have addedBefore/movedBefore callbacks.
@@ -201,7 +197,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 	paused = false;
 
-	constructor(public store: UseBoundStore<StoreApi<{ records: T[] }>>) {
+	constructor(protected store: UseBoundStore<StoreApi<{ records: T[] }>>) {
 		this.find({}).observe({
 			added: (record) => {
 				store.setState((state) => ({ records: [...state.records, record] }));
@@ -224,6 +220,34 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		});
 	}
 
+	has(id: T['_id']) {
+		return this._docs.has(id);
+	}
+
+	get(id: T['_id']) {
+		return this._docs.get(id);
+	}
+
+	all() {
+		return this._docs.values();
+	}
+
+	count() {
+		return this._docs.size();
+	}
+
+	set(doc: T) {
+		this._docs.set(doc._id, doc);
+	}
+
+	delete(id: T['_id']) {
+		this._docs.remove(id);
+	}
+
+	clear() {
+		this._docs.clear();
+	}
+
 	claimNextQueryId() {
 		return `${this.next_qid++}`;
 	}
@@ -236,66 +260,33 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		return this.find({}, options).countAsync();
 	}
 
-	// options may include sort, skip, limit, reactive
-	// sort may be any of these forms:
-	//     {a: 1, b: -1}
-	//     [["a", "asc"], ["b", "desc"]]
-	//     ["a", ["b", "desc"]]
-	//   (in the first form you're beholden to key enumeration order in
-	//   your javascript VM)
-	//
-	// reactive: if given, and false, don't register with Tracker (default
-	// is true)
-	//
-	// XXX possibly should support retrieving a subset of fields? and
-	// have it be a hint (ignored on the client, when not copying the
-	// doc?)
-	//
-	// XXX sort does not yet support subkeys ('a.b') .. fix that!
-	// XXX add one more sort form: "key"
-	// XXX tests
 	find(selector: Filter<T> | T['_id'] = {}, options?: Options<T>) {
 		return new Cursor(this, selector, options);
 	}
 
 	findOne(selector?: Filter<T> | T['_id'], options: Options<T> = {}) {
-		// NOTE: by setting limit 1 here, we end up using very inefficient
-		// code that recomputes the whole query on each update. The upside is
-		// that when you reactively depend on a findOne you only get
-		// invalidated when the found object changes, not any object in the
-		// collection. Most findOne will be by id, which has a fast path, so
-		// this might not be a big deal. In most cases, invalidation causes
-		// the called to re-query anyway, so this should be a net performance
-		// improvement.
-		options.limit = 1;
-
-		return this.find(selector, options).fetch()[0];
+		return this.find(selector, { ...options, limit: 1 }).fetch()[0];
 	}
 
 	async findOneAsync(selector: Filter<T> | T['_id'] = {}, options: Options<T> = {}) {
-		options.limit = 1;
-		return (await this.find(selector, options).fetchAsync())[0];
+		return (await this.find(selector, { ...options, limit: 1 }).fetchAsync())[0];
 	}
 
 	prepareInsert(doc: T) {
 		assertHasValidFieldNames(doc);
 
-		// if you really want to use ObjectIDs, set this global.
-		// Mongo.Collection specifies its own ids and does not use this code.
-		if (!hasOwn.call(doc, '_id')) {
-			doc._id = Random.id();
+		if (!('_id' in doc)) {
+			throw createMinimongoError('Document must have an _id field');
 		}
 
-		const id = doc._id;
-
-		if (this._docs.has(id)) {
-			throw createMinimongoError(`Duplicate _id '${id}'`);
+		if (this.has(doc._id)) {
+			throw createMinimongoError(`Duplicate _id '${doc._id}'`);
 		}
 
-		this._saveOriginal(id, undefined);
-		this._docs.set(id, doc);
+		this._saveOriginal(doc._id, undefined);
+		this.set(doc);
 
-		return id;
+		return doc._id;
 	}
 
 	// XXX possibly enforce that 'undefined' does not appear (we assume
@@ -408,9 +399,9 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	clearResultQueries(callback?: (error: Error | null, result: number) => void) {
-		const result = this._docs.size();
+		const result = this.count();
 
-		this._docs.clear();
+		this.clear();
 
 		Object.keys(this.queries).forEach((qid) => {
 			const query = this.queries[qid];
@@ -444,9 +435,8 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		const queriesToRecompute: string[] = [];
 		const queryRemove: { qid: string; doc: T }[] = [];
 
-		for (let i = 0; i < remove.length; i++) {
-			const removeId = remove[i];
-			const removeDoc = this._docs.get(removeId)!;
+		for (const removeId of remove) {
+			const removeDoc = this.get(removeId)!;
 
 			Object.keys(this.queries).forEach((qid) => {
 				const query = this.queries[qid];
@@ -455,7 +445,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 					return;
 				}
 
-				if (query.matcher.documentMatches(removeDoc!).result) {
+				if (query.matcher.documentMatches(removeDoc).result) {
 					if (query.cursor.skip || query.cursor.limit) {
 						queriesToRecompute.push(qid);
 					} else {
@@ -465,7 +455,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			});
 
 			this._saveOriginal(removeId, removeDoc);
-			this._docs.remove(removeId);
+			this.delete(removeId);
 		}
 
 		return { queriesToRecompute, queryRemove, remove };
@@ -647,12 +637,12 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				// pretty rare case, so we just clone the entire result set with
 				// no optimizations for documents that appear in these result
 				// sets and other queries.
-				if (query.results instanceof IdMap) {
+				if (!!query.results && !Array.isArray(query.results)) {
 					qidToOriginalResults[qid] = query.results.clone();
 					return;
 				}
 
-				if (!(query.results instanceof Array)) {
+				if (!Array.isArray(query.results)) {
 					throw new Error('Assertion failed: query.results not an array');
 				}
 
@@ -742,7 +732,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				  },
 		) => void,
 	) {
-		if (!callback && options instanceof Function) {
+		if (!callback && typeof options === 'function') {
 			callback = options as unknown as typeof callback;
 			options = null;
 		}
@@ -836,7 +826,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				  },
 		) => void,
 	) {
-		if (!callback && options instanceof Function) {
+		if (!callback && typeof options === 'function') {
 			callback = options as (
 				error: Error | null,
 				result:
@@ -988,7 +978,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		if (specificIds) {
 			for (const id of specificIds) {
-				const doc = this._docs.get(id);
+				const doc = this.get(id);
 
 				// eslint-disable-next-line no-await-in-loop
 				if (doc && !(await fn(doc, id))) {
@@ -996,7 +986,11 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				}
 			}
 		} else {
-			await this._docs.forEachAsync(fn);
+			for await (const doc of this.all()) {
+				if ((await fn(doc, doc._id)) === false) {
+					break;
+				}
+			}
 		}
 	}
 
@@ -1005,14 +999,18 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 
 		if (specificIds) {
 			for (const id of specificIds) {
-				const doc = this._docs.get(id);
+				const doc = this.get(id);
 
 				if (doc && !fn(doc, id)) {
 					break;
 				}
 			}
 		} else {
-			this._docs.forEach(fn);
+			for (const doc of this.all()) {
+				if (fn(doc, doc._id) === false) {
+					break;
+				}
+			}
 		}
 	}
 
@@ -1169,9 +1167,9 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	recomputeAllResults() {
-		this._docs.clear();
+		this.clear();
 		for (const record of this.store.getState().records) {
-			this._docs.set(record._id, { ...record });
+			this.set({ ...record });
 		}
 		for (const query of Object.values(this.queries)) {
 			this._recomputeResults(query);
@@ -1765,7 +1763,7 @@ const MODIFIERS = {
 	},
 	$unset(target: any, field: any) {
 		if (target !== undefined) {
-			if (target instanceof Array) {
+			if (Array.isArray(target)) {
 				if (field in target) {
 					target[field] = null;
 				}
@@ -1779,7 +1777,7 @@ const MODIFIERS = {
 			target[field] = [];
 		}
 
-		if (!(target[field] instanceof Array)) {
+		if (!Array.isArray(target[field])) {
 			throw createMinimongoError('Cannot apply $push modifier to non-array', { field });
 		}
 
@@ -1794,7 +1792,7 @@ const MODIFIERS = {
 
 		// Fancy mode: $each (and maybe $slice and $sort and $position)
 		const toPush = arg.$each;
-		if (!(toPush instanceof Array)) {
+		if (!Array.isArray(toPush)) {
 			throw createMinimongoError('$each must be an array', { field });
 		}
 
@@ -1878,7 +1876,7 @@ const MODIFIERS = {
 		}
 	},
 	$pushAll(target: any, field: any, arg: any) {
-		if (!(typeof arg === 'object' && arg instanceof Array)) {
+		if (!(typeof arg === 'object' && Array.isArray(arg))) {
 			throw createMinimongoError('Modifier $pushAll/pullAll allowed for arrays only');
 		}
 
@@ -1888,7 +1886,7 @@ const MODIFIERS = {
 
 		if (toPush === undefined) {
 			target[field] = arg;
-		} else if (!(toPush instanceof Array)) {
+		} else if (!Array.isArray(toPush)) {
 			throw createMinimongoError('Cannot apply $pushAll modifier to non-array', { field });
 		} else {
 			toPush.push(...arg);
@@ -1912,7 +1910,7 @@ const MODIFIERS = {
 		const toAdd = target[field];
 		if (toAdd === undefined) {
 			target[field] = values;
-		} else if (!(toAdd instanceof Array)) {
+		} else if (!Array.isArray(toAdd)) {
 			throw createMinimongoError('Cannot apply $addToSet modifier to non-array', { field });
 		} else {
 			values.forEach((value: any) => {
@@ -1935,7 +1933,7 @@ const MODIFIERS = {
 			return;
 		}
 
-		if (!(toPop instanceof Array)) {
+		if (!Array.isArray(toPop)) {
 			throw createMinimongoError('Cannot apply $pop modifier to non-array', { field });
 		}
 
@@ -1955,12 +1953,12 @@ const MODIFIERS = {
 			return;
 		}
 
-		if (!(toPull instanceof Array)) {
+		if (!Array.isArray(toPull)) {
 			throw createMinimongoError('Cannot apply $pull/pullAll modifier to non-array', { field });
 		}
 
 		let out;
-		if (arg != null && typeof arg === 'object' && !(arg instanceof Array)) {
+		if (arg != null && typeof arg === 'object' && !Array.isArray(arg)) {
 			// XXX would be much nicer to compile this once, rather than
 			// for each document we modify.. but usually we're not
 			// modifying that many documents, so we'll let it slide for
@@ -1980,7 +1978,7 @@ const MODIFIERS = {
 		target[field] = out;
 	},
 	$pullAll(target: any, field: any, arg: any) {
-		if (!(typeof arg === 'object' && arg instanceof Array)) {
+		if (!(typeof arg === 'object' && Array.isArray(arg))) {
 			throw createMinimongoError('Modifier $pushAll/pullAll allowed for arrays only', { field });
 		}
 
@@ -1994,7 +1992,7 @@ const MODIFIERS = {
 			return;
 		}
 
-		if (!(toPull instanceof Array)) {
+		if (!Array.isArray(toPull)) {
 			throw createMinimongoError('Cannot apply $pull/pullAll modifier to non-array', { field });
 		}
 
@@ -2031,7 +2029,7 @@ const invalidCharMsg = {
 };
 
 // checks if all field names in an object are valid
-function assertHasValidFieldNames(doc: any) {
+function assertHasValidFieldNames(doc: unknown) {
 	if (doc && typeof doc === 'object') {
 		JSON.stringify(doc, (key, value) => {
 			assertIsValidFieldName(key);
@@ -2040,7 +2038,7 @@ function assertHasValidFieldNames(doc: any) {
 	}
 }
 
-function assertIsValidFieldName(key: any) {
+function assertIsValidFieldName(key: string) {
 	let match;
 	if (typeof key === 'string' && (match = key.match(/^\$|\.|\0/))) {
 		throw createMinimongoError(`Key ${key} must not ${invalidCharMsg[match[0] as keyof typeof invalidCharMsg]}`);
@@ -2081,7 +2079,7 @@ function findModTarget(doc: any, keyparts: (string | number)[], options: any = {
 			throw error;
 		}
 
-		if (doc instanceof Array) {
+		if (Array.isArray(doc)) {
 			if (options.forbidArray) {
 				return null;
 			}
@@ -2127,7 +2125,7 @@ function findModTarget(doc: any, keyparts: (string | number)[], options: any = {
 				}
 			}
 		} else {
-			assertIsValidFieldName(keypart);
+			assertIsValidFieldName(keypart as string);
 
 			if (!(keypart in doc)) {
 				if (options.noCreate) {

@@ -40,7 +40,7 @@ export class Matcher<T extends { _id: string }> {
 
 	_isUpdate: boolean;
 
-	constructor(selector: Filter<T> | T['_id'] | ((doc: T) => boolean), isUpdate = false) {
+	constructor(selector: Filter<T> | T['_id'] | ((this: T) => boolean), isUpdate = false) {
 		// A set (object mapping string -> *) of all of the document paths looked
 		// at by the selector. Also includes the empty string if it may look at any
 		// path (eg, $where).
@@ -91,10 +91,10 @@ export class Matcher<T extends { _id: string }> {
 	// Given a selector, return a function that takes one argument, a
 	// document. It returns a result object.
 	_compileSelector(
-		selector: ((this: T) => boolean) | string | { _id: undefined | null | false } | object,
+		selector: ((this: T) => boolean) | string | { _id: undefined | null | false } | Record<string, unknown>,
 	): (doc: T) => { result: boolean } {
 		// you can pass a literal function instead of a selector
-		if (selector instanceof Function) {
+		if (typeof selector === 'function') {
 			this._isSimple = false;
 			this._selector = selector;
 			this._recordPathUsed('');

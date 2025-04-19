@@ -1587,22 +1587,3 @@ export function _isPlainObject(x: any): x is Record<string, any> {
 export function _selectorIsId(selector: unknown): selector is string | number {
 	return typeof selector === 'number' || typeof selector === 'string';
 }
-
-export function consumePairs<K, V>(iterable: Iterable<[key: K, value: V]>, callback: (value: V, key: K) => boolean | void): void {
-	for (const [key, value] of iterable) {
-		if (callback.call(null, value, key) === false) {
-			return;
-		}
-	}
-}
-
-export async function consumePairsAsync<K, V>(
-	iterable: Iterable<[key: K, value: V]> | AsyncIterable<[key: K, value: V]>,
-	callback: (value: V, key: K) => Promise<boolean | void>,
-): Promise<void> {
-	for await (const [key, value] of iterable) {
-		if ((await callback.call(null, value, key)) === false) {
-			return;
-		}
-	}
-}

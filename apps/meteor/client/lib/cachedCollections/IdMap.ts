@@ -1,7 +1,5 @@
 import { EJSON } from 'meteor/ejson';
 
-import { consumePairs, consumePairsAsync } from './common';
-
 interface IIdMap<TId, TValue> {
 	get(id: TId): TValue | undefined;
 	set(id: TId, value: TValue): void;
@@ -48,11 +46,19 @@ export class IdMap<TId, TValue> implements IIdMap<TId, TValue> {
 
 	// Iterates over the items in the map. Return `false` to break the loop.
 	forEach(callback: (value: TValue, id: TId) => boolean | void): void {
-		consumePairs(this._map, callback);
+		for (const [key, value] of this._map) {
+			if (callback.call(null, value, key) === false) {
+				return;
+			}
+		}
 	}
 
 	async forEachAsync(callback: (value: TValue, id: TId) => Promise<boolean | void>): Promise<void> {
-		await consumePairsAsync(this._map, callback);
+		for await (const [key, value] of this._map) {
+			if ((await callback.call(null, value, key)) === false) {
+				return;
+			}
+		}
 	}
 
 	size(): number {
@@ -80,5 +86,9 @@ export class IdMap<TId, TValue> implements IIdMap<TId, TValue> {
 
 	[Symbol.iterator](): IterableIterator<[TId, TValue]> {
 		return this._map.entries();
+	}
+
+	values(): IterableIterator<TValue> {
+		return this._map.values();
 	}
 }

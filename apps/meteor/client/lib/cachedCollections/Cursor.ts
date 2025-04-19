@@ -11,7 +11,7 @@ import { ObserveHandle } from './ObserveHandle';
 import { OrderedDict } from './OrderedDict';
 import type { Query } from './Query';
 import { Sorter } from './Sorter';
-import { _isPlainObject, _selectorIsId, consumePairs, createMinimongoError, hasOwn, projectionDetails } from './common';
+import { _isPlainObject, _selectorIsId, createMinimongoError, hasOwn, projectionDetails } from './common';
 
 export type DispatchTransform<TTransform, T, TProjection> = TTransform extends (...args: any) => any
 	? ReturnType<TTransform>
@@ -143,9 +143,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 			this._depend({ added: true, removed: true }, true);
 		}
 
-		return this._getRawObjects({
-			ordered: true,
-		}).length;
+		return this._getRawObjects({ ordered: true }).length;
 	}
 
 	/**
@@ -382,10 +380,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 			this.collection.queries[qid] = query;
 		}
 
-		query.results = this._getRawObjects({
-			ordered,
-			distances: query.distances,
-		});
+		query.results = this._getRawObjects({ ordered, distances: query.distances });
 
 		if (this.collection.paused) {
 			query.resultsSnapshot = ordered ? [] : new IdMap<T['_id'], T>();
@@ -569,7 +564,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 				return results;
 			}
 
-			const selectedDoc = this.collection._docs.get(this._selectorId);
+			const selectedDoc = this.collection.get(this._selectorId);
 			if (selectedDoc) {
 				if (options.ordered) {
 					(results as T[]).push(selectedDoc);
@@ -596,29 +591,27 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		}
 
 		Meteor._runFresh(() => {
-			consumePairs(this.collection._docs, (doc, id) => {
+			for (const doc of this.collection.all()) {
 				const matchResult = this.matcher.documentMatches(doc);
 				if (matchResult.result) {
 					if (options.ordered) {
 						(results as T[]).push(doc);
 
 						if (distances && matchResult.distance !== undefined) {
-							distances.set(id, matchResult.distance);
+							distances.set(doc._id, matchResult.distance);
 						}
 					} else {
-						(results as IdMap<T['_id'], T>).set(id, doc);
+						(results as IdMap<T['_id'], T>).set(doc._id, doc);
 					}
 				}
 
 				// Override to ensure all docs are matched if ignoring skip & limit
 				if (!applySkipLimit) {
-					return true;
+					continue;
 				}
 
-				// Fast path for limited unsorted queries.
-				// XXX 'length' check here seems wrong for ordered
-				return !this.limit || !!this.skip || !!this.sorter || (results as T[]).length !== this.limit;
-			});
+				if ((!this.limit || !!this.skip || !!this.sorter || (results as T[]).length !== this.limit) === false) break;
+			}
 		});
 
 		if (!options.ordered) {

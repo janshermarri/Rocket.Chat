@@ -59,7 +59,7 @@ export class Sorter<T extends { _id: string }> {
 			});
 		};
 
-		if (spec instanceof Array) {
+		if (Array.isArray(spec)) {
 			spec.forEach((element) => {
 				if (typeof element === 'string') {
 					addSpecPart(element, true);
