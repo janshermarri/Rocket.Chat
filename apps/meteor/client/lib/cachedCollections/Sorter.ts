@@ -1,6 +1,5 @@
 import type { Filter, Sort } from 'mongodb';
 
-import type { IdMap } from './IdMap';
 import { Matcher } from './Matcher';
 import { _f, expandArraysInBranches, hasOwn, makeLookupFunction } from './common';
 
@@ -99,30 +98,8 @@ export class Sorter<T extends { _id: string }> {
 		this._keyComparator = composeComparators(this._sortSpecParts.map((_spec, i) => this._keyFieldComparator(i)));
 	}
 
-	getComparator(options?: { distances?: IdMap<T['_id'], number> }): (a: T, b: T) => number {
-		// If sort is specified or have no distances, just use the comparator from
-		// the source specification (which defaults to "everything is equal".
-		// issue #3599
-		// https://docs.mongodb.com/manual/reference/operator/query/near/#sort-operation
-		// sort effectively overrides $near
-		if (this._sortSpecParts.length || !options || !options.distances) {
-			return this._getBaseComparator();
-		}
-
-		const { distances } = options;
-
-		// Return a comparator which compares using $near distances.
-		return (a, b) => {
-			if (!distances.has(a._id)) {
-				throw Error(`Missing distance for ${a._id}`);
-			}
-
-			if (!distances.has(b._id)) {
-				throw Error(`Missing distance for ${b._id}`);
-			}
-
-			return distances.get(a._id)! - distances.get(b._id)!;
-		};
+	getComparator(): (a: T, b: T) => number {
+		return this._getBaseComparator();
 	}
 
 	// Takes in two keys: arrays whose lengths match the number of spec
@@ -249,15 +226,12 @@ export class Sorter<T extends { _id: string }> {
 		});
 	}
 
-	// Returns a comparator that represents the sort specification (but not
-	// including a possible geoquery distance tie-breaker).
+	// Returns a comparator that represents the sort specification.
 	_getBaseComparator(): (a: T, b: T) => number {
 		if (this._sortFunction) {
 			return this._sortFunction;
 		}
 
-		// If we're only sorting on geoquery distance and no specs, just say
-		// everything is equal.
 		if (!this._sortSpecParts.length) {
 			return (_doc1: T, _doc2: T) => 0;
 		}

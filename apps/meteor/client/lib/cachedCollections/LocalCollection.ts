@@ -222,11 +222,11 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		});
 	}
 
-	has(id: T['_id']) {
+	private has(id: T['_id']) {
 		return this._docs.has(id);
 	}
 
-	get(id: T['_id']) {
+	private get(id: T['_id']) {
 		return this._docs.get(id);
 	}
 
@@ -267,7 +267,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	find(selector: Filter<T> | T['_id'] = {}, options?: Options<T>) {
-		return new Cursor(this, selector, options);
+		return Cursor.create(this, selector, options);
 	}
 
 	findOne(selector?: Filter<T> | T['_id'], options: Options<T> = {}) {
@@ -313,10 +313,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			const matchResult = query.matcher.documentMatches(doc);
 
 			if (matchResult.result) {
-				if (query.distances && matchResult.distance !== undefined) {
-					query.distances.set(id, matchResult.distance);
-				}
-
 				if (query.cursor.skip || query.cursor.limit) {
 					queriesToRecompute.push(qid);
 				} else {
@@ -357,10 +353,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			const matchResult = query.matcher.documentMatches(doc);
 
 			if (matchResult.result) {
-				if (query.distances && matchResult.distance !== undefined) {
-					query.distances.set(id, matchResult.distance);
-				}
-
 				if (query.cursor.skip || query.cursor.limit) {
 					queriesToRecompute.push(qid);
 				} else {
@@ -482,7 +474,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			const query = this.queries[remove.qid];
 
 			if (query) {
-				query.distances && query.distances.remove(remove.doc._id);
 				this._removeFromResultsSync(query, remove.doc);
 			}
 		});
@@ -523,7 +514,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			const query = this.queries[remove.qid];
 
 			if (query) {
-				query.distances && query.distances.remove(remove.doc._id);
 				// eslint-disable-next-line no-await-in-loop
 				await this._removeFromResultsAsync(query, remove.doc);
 			}
@@ -747,7 +737,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			options = {};
 		}
 
-		const matcher = new Matcher(selector, true);
+		const matcher = new Matcher(selector);
 
 		const qidToOriginalResults = this.prepareUpdate(selector);
 
@@ -849,7 +839,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			options = {};
 		}
 
-		const matcher = new Matcher(selector, true);
+		const matcher = new Matcher(selector);
 
 		const qidToOriginalResults = this.prepareUpdate(selector);
 
@@ -1061,10 +1051,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			const after = afterMatch.result;
 			const before = matchedBefore[qid];
 
-			if (after && query.distances && afterMatch.distance !== undefined) {
-				query.distances.set(doc._id, afterMatch.distance);
-			}
-
 			if (query.cursor.skip || query.cursor.limit) {
 				// We need to recompute any query where the doc may have been in the
 				// cursor's window either before or after the update. (Note that if skip
@@ -1104,10 +1090,6 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			const afterMatch = query.matcher.documentMatches(doc);
 			const after = afterMatch.result;
 			const before = matchedBefore[qid];
-
-			if (after && query.distances && afterMatch.distance !== undefined) {
-				query.distances.set(doc._id, afterMatch.distance);
-			}
 
 			if (query.cursor.skip || query.cursor.limit) {
 				// We need to recompute any query where the doc may have been in the
@@ -1158,14 +1140,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 			oldResults = query.results;
 		}
 
-		if (query.distances) {
-			query.distances.clear();
-		}
-
-		query.results = query.cursor._getRawObjects({
-			distances: query.distances,
-			ordered: query.ordered,
-		});
+		query.results = query.cursor._getRawObjects({ ordered: query.ordered });
 
 		if (!this.paused) {
 			DiffSequence.diffQueryChanges(query.ordered, oldResults!, query.results, query, { projectionFn: query.projectionFn });
@@ -1336,9 +1311,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				(query as OrderedQuery<T, Options<T>, T>).results.push(doc);
 			} else {
 				const i = this._insertInSortedList(
-					(query as OrderedQuery<T, Options<T>, T>).sorter.getComparator({
-						distances: (query as OrderedQuery<T, Options<T>, T>).distances,
-					}),
+					(query as OrderedQuery<T, Options<T>, T>).sorter.getComparator(),
 					(query as OrderedQuery<T, Options<T>, T>).results,
 					doc,
 				);
@@ -1374,9 +1347,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 				(query as OrderedQuery<T, Options<T>, T>).results.push(doc);
 			} else {
 				const i = this._insertInSortedList(
-					(query as OrderedQuery<T, Options<T>, T>).sorter.getComparator({
-						distances: (query as OrderedQuery<T, Options<T>, T>).distances,
-					}),
+					(query as OrderedQuery<T, Options<T>, T>).sorter.getComparator(),
 					(query as OrderedQuery<T, Options<T>, T>).results,
 					doc,
 				);
@@ -1577,7 +1548,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		(query as OrderedQuery<T, Options<T>, any>).results.splice(oldIdx, 1);
 
 		const newIdx = this._insertInSortedList(
-			(query as OrderedQuery<T, Options<T>, any>).sorter.getComparator({ distances: query.distances }),
+			(query as OrderedQuery<T, Options<T>, any>).sorter.getComparator(),
 			(query as OrderedQuery<T, Options<T>, any>).results,
 			doc,
 		);
@@ -1620,7 +1591,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 		(query as OrderedQuery<T, Options<T>, any>).results.splice(oldIdx, 1);
 
 		const newIdx = this._insertInSortedList(
-			(query as OrderedQuery<T, Options<T>, any>).sorter.getComparator({ distances: query.distances }),
+			(query as OrderedQuery<T, Options<T>, any>).sorter.getComparator(),
 			(query as OrderedQuery<T, Options<T>, any>).results,
 			doc,
 		);

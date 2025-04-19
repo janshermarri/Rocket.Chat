@@ -236,7 +236,7 @@ const ELEMENT_OPERATORS = {
 						// {a: [8]} but not {a: [[8]]}
 						arg = [{ value: arrayElement, dontIterate: true }];
 					}
-					// XXX support $near in $elemMatch by propagating $distance?
+
 					if (subMatcher(arg).result) {
 						return i; // specially understood to mean "use as arrayIndices"
 					}
@@ -340,7 +340,6 @@ const VALUE_OPERATORS = {
 
 		return everythingMatcher;
 	},
-	// $maxDistance is basically an argument to $near
 	$maxDistance(_operand: any, valueSelector: any) {
 		if (!valueSelector.$near) {
 			throw Error('$maxDistance needs a $near');
@@ -372,106 +371,8 @@ const VALUE_OPERATORS = {
 		// SAME branch.
 		return andBranchedMatchers(branchedMatchers);
 	},
-	$near(operand: any, valueSelector: any, matcher: Matcher<{ _id: string }>, isRoot: any) {
-		if (!isRoot) {
-			throw Error("$near can't be inside another $ operator");
-		}
-
-		matcher._hasGeoQuery = true;
-
-		// There are two kinds of geodata in MongoDB: legacy coordinate pairs and
-		// GeoJSON. They use different distance metrics, too. GeoJSON queries are
-		// marked with a $geometry property, though legacy coordinates can be
-		// matched using $geometry.
-		let maxDistance: any;
-		let point: any;
-		let distance;
-		if (_isPlainObject(operand) && hasOwn.call(operand, '$geometry')) {
-			// GeoJSON "2dsphere" mode.
-			maxDistance = operand.$maxDistance;
-			point = operand.$geometry;
-			distance = (value: any): any => {
-				// XXX: for now, we don't calculate the actual distance between, say,
-				// polygon and circle. If people care about this use-case it will get
-				// a priority.
-				if (!value) {
-					return null;
-				}
-
-				// if (!value.type) {
-				// 	return GeoJSON.pointDistance(point, { type: 'Point', coordinates: pointToArray(value) });
-				// }
-
-				// if (value.type === 'Point') {
-				// 	return GeoJSON.pointDistance(point, value);
-				// }
-
-				// return GeoJSON.geometryWithinRadius(value, point, maxDistance) ? 0 : maxDistance + 1;
-			};
-		} else {
-			maxDistance = valueSelector.$maxDistance;
-
-			if (!isIndexable(operand)) {
-				throw Error('$near argument must be coordinate pair or GeoJSON');
-			}
-
-			point = pointToArray(operand);
-
-			distance = (value: any) => {
-				if (!isIndexable(value)) {
-					return null;
-				}
-
-				return distanceCoordinatePairs(point, value);
-			};
-		}
-
-		return (branchedValues: any) => {
-			// There might be multiple points in the document that match the given
-			// field. Only one of them needs to be within $maxDistance, but we need to
-			// evaluate all of them and use the nearest one for the implicit sort
-			// specifier. (That's why we can't just use ELEMENT_OPERATORS here.)
-			//
-			// Note: This differs from MongoDB's implementation, where a document will
-			// actually show up *multiple times* in the result set, with one entry for
-			// each within-$maxDistance branching point.
-			const result: any = { result: false };
-			expandArraysInBranches(branchedValues).every((branch: any) => {
-				// if operation is an update, don't skip branches, just return the first
-				// one (#3599)
-				let curDistance;
-				if (!matcher._isUpdate) {
-					if (!(typeof branch.value === 'object')) {
-						return true;
-					}
-
-					curDistance = distance(branch.value);
-
-					// Skip branches that aren't real points or are too far away.
-					if (curDistance === null || curDistance > maxDistance) {
-						return true;
-					}
-
-					// Skip anything that's a tie.
-					if (result.distance !== undefined && result.distance <= curDistance) {
-						return true;
-					}
-				}
-
-				result.result = true;
-				result.distance = curDistance;
-
-				if (branch.arrayIndices) {
-					result.arrayIndices = branch.arrayIndices;
-				} else {
-					delete result.arrayIndices;
-				}
-
-				return !matcher._isUpdate;
-			});
-
-			return result;
-		};
+	$near() {
+		throw new Error('$near is not supported in this context');
 	},
 } as const;
 
@@ -491,19 +392,10 @@ function andSomeMatchers(subMatchers: ((docOrBranches: any) => any)[]): any {
 	return (docOrBranches: any) => {
 		const match: {
 			result?: boolean;
-			distance?: number;
 			arrayIndices?: number[];
 		} = {};
 		match.result = subMatchers.every((fn) => {
 			const subResult = fn(docOrBranches);
-
-			// Copy a 'distance' number out of the first sub-matcher that has
-			// one. Yes, this means that if there are multiple $near fields in a
-			// query, something arbitrary happens; this appears to be consistent with
-			// Mongo.
-			if (subResult.result && subResult.distance !== undefined && match.distance === undefined) {
-				match.distance = subResult.distance;
-			}
 
 			// Similarly, propagate arrayIndices from sub-matchers... but to match
 			// MongoDB behavior, this time the *last* sub-matcher with arrayIndices
@@ -517,7 +409,6 @@ function andSomeMatchers(subMatchers: ((docOrBranches: any) => any)[]): any {
 
 		// If we didn't actually match, forget any extra metadata we came up with.
 		if (!match.result) {
-			delete match.distance;
 			delete match.arrayIndices;
 		}
 
@@ -546,15 +437,11 @@ function compileArrayOfDocumentSelectors(selectors: any, matcher: Matcher<{ _id:
 // selector). Returns a function mapping document->result object.
 //
 // matcher is the Matcher object we are compiling.
-//
-// If this is the root document selector (ie, not wrapped in $and or the like),
-// then isRoot is true. (This is used by $near.)
 export function compileDocumentSelector<TMatcher extends Matcher<any>>(
 	docSelector: object,
 	matcher: TMatcher,
 	options: {
 		inElemMatch?: boolean;
-		isRoot?: boolean;
 	} = {},
 ) {
 	const docMatchers = Object.keys(docSelector)
@@ -587,7 +474,7 @@ export function compileDocumentSelector<TMatcher extends Matcher<any>>(
 			}
 
 			const lookUpByIndex = makeLookupFunction(key);
-			const valueMatcher = compileValueSelector(subSelector, matcher, options.isRoot);
+			const valueMatcher = compileValueSelector(subSelector, matcher);
 
 			return (doc: any) => valueMatcher(lookUpByIndex(doc));
 		})
@@ -600,14 +487,14 @@ export function compileDocumentSelector<TMatcher extends Matcher<any>>(
 // {$gt: 5, $lt: 9}, or a regular expression, or any non-expression object (to
 // indicate equality).  Returns a branched matcher: a function mapping
 // [branched value]->result object.
-function compileValueSelector(valueSelector: any, matcher: Matcher<{ _id: string }>, isRoot = false) {
+function compileValueSelector(valueSelector: any, matcher: Matcher<{ _id: string }>) {
 	if (valueSelector instanceof RegExp) {
 		matcher._isSimple = false;
 		return convertElementMatcherToBranchedMatcher(regexpElementMatcher(valueSelector));
 	}
 
 	if (isOperatorObject(valueSelector)) {
-		return operatorBranchedMatcher(valueSelector, matcher, isRoot);
+		return operatorBranchedMatcher(valueSelector, matcher);
 	}
 
 	return convertElementMatcherToBranchedMatcher(equalityElementMatcher(valueSelector));
@@ -648,14 +535,6 @@ function convertElementMatcherToBranchedMatcher(elementMatcher: any, options: an
 
 		return match;
 	};
-}
-
-// Helpers for $near.
-function distanceCoordinatePairs(a: any, b: any) {
-	const pointA = pointToArray(a);
-	const pointB = pointToArray(b);
-
-	return Math.hypot(pointA[0] - pointB[0], pointA[1] - pointB[1]);
 }
 
 // Takes something that is not an operator object and returns an element matcher
@@ -1054,7 +933,7 @@ export function nothingMatcher(_docOrBranchedValues: any) {
 
 // Takes an operator object (an object with $ keys) and returns a branched
 // matcher for it.
-function operatorBranchedMatcher(valueSelector: any, matcher: Matcher<{ _id: string }>, isRoot: any) {
+function operatorBranchedMatcher(valueSelector: any, matcher: Matcher<{ _id: string }>) {
 	// Each valueSelector works separately on the various branches.  So one
 	// operator can match one branch and another can match another branch.  This
 	// is OK.
@@ -1072,7 +951,7 @@ function operatorBranchedMatcher(valueSelector: any, matcher: Matcher<{ _id: str
 		}
 
 		if (hasOwn.call(VALUE_OPERATORS, operator)) {
-			return VALUE_OPERATORS[operator as keyof typeof VALUE_OPERATORS](operand, valueSelector, matcher, isRoot);
+			return VALUE_OPERATORS[operator as keyof typeof VALUE_OPERATORS](operand, valueSelector, matcher);
 		}
 
 		if (hasOwn.call(ELEMENT_OPERATORS, operator)) {
@@ -1129,13 +1008,6 @@ function pathsToTree(paths: any, newLeafFn: any, conflictFn: any, root: any = {}
 	});
 
 	return root;
-}
-
-// Makes sure we get 2 elements array and assume the first one to be x and
-// the second one to y no matter what user passes.
-// In case user passes { lon: x, lat: y } returns [x, y]
-function pointToArray(point: any) {
-	return Array.isArray(point) ? point.slice() : [point.x, point.y];
 }
 
 // Creating a document from an upsert is quite tricky.

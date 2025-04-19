@@ -10,7 +10,7 @@ import { _selectorIsId, compileDocumentSelector, hasOwn, nothingMatcher } from '
 //  - a 'matcher' is its compiled form (whether a full Minimongo.Matcher
 //    object or one of the component lambdas that matches parts of it)
 //  - a 'result object' is an object with a 'result' field and maybe
-//    distance and arrayIndices.
+//    arrayIndices.
 //  - a 'branched value' is an object with a 'value' field and maybe
 //    'dontIterate' and 'arrayIndices'.
 //  - a 'document' is a top-level object that can be stored in a collection.
@@ -26,46 +26,24 @@ import { _selectorIsId, compileDocumentSelector, hasOwn, nothingMatcher } from '
 export class Matcher<T extends { _id: string }> {
 	private _paths: Record<string, boolean>;
 
-	_hasGeoQuery: boolean;
-
 	_hasWhere: boolean;
 
 	_isSimple: boolean;
 
-	_matchingDocument: object | undefined;
+	private _docMatcher: (doc: T) => { result: boolean; arrayIndices?: (number | 'x')[] };
 
-	_selector: object | ((this: T) => boolean) | null;
-
-	private _docMatcher: (doc: T) => { result: boolean; distance?: number; arrayIndices?: (number | 'x')[] };
-
-	_isUpdate: boolean;
-
-	constructor(selector: Filter<T> | T['_id'] | ((this: T) => boolean), isUpdate = false) {
+	constructor(selector: Filter<T> | T['_id'] | ((this: T) => boolean)) {
 		// A set (object mapping string -> *) of all of the document paths looked
 		// at by the selector. Also includes the empty string if it may look at any
 		// path (eg, $where).
 		this._paths = {};
-		// Set to true if compilation finds a $near.
-		this._hasGeoQuery = false;
 		// Set to true if compilation finds a $where.
 		this._hasWhere = false;
 		// Set to false if compilation finds anything other than a simple equality
 		// or one or more of '$gt', '$gte', '$lt', '$lte', '$ne', '$in', '$nin' used
 		// with scalars as operands.
 		this._isSimple = true;
-		// Set to a dummy document which always matches this Matcher. Or set to null
-		// if such document is too hard to find.
-		this._matchingDocument = undefined;
-		// A clone of the original selector. It may just be a function if the user
-		// passed in a function; otherwise is definitely an object (eg, IDs are
-		// translated into {_id: ID} first. Used by canBecomeTrueByModifier and
-		// Sorter._useWithMatcher.
-		this._selector = null;
 		this._docMatcher = this._compileSelector(selector);
-		// Set to true if selection is done for an update operation
-		// Default is false
-		// Used for $near array update (issue #3599)
-		this._isUpdate = isUpdate;
 	}
 
 	documentMatches(doc: T) {
@@ -74,10 +52,6 @@ export class Matcher<T extends { _id: string }> {
 		}
 
 		return this._docMatcher(doc);
-	}
-
-	hasGeoQuery(): boolean {
-		return this._hasGeoQuery;
 	}
 
 	hasWhere(): boolean {
@@ -96,7 +70,6 @@ export class Matcher<T extends { _id: string }> {
 		// you can pass a literal function instead of a selector
 		if (typeof selector === 'function') {
 			this._isSimple = false;
-			this._selector = selector;
 			this._recordPathUsed('');
 
 			return (doc) => ({ result: !!selector.call(doc) });
@@ -104,7 +77,6 @@ export class Matcher<T extends { _id: string }> {
 
 		// shorthand -- scalar _id
 		if (_selectorIsId(selector)) {
-			this._selector = { _id: selector };
 			this._recordPathUsed('_id');
 
 			return (doc) => ({ result: EJSON.equals(doc._id as any, selector as any) });
@@ -123,9 +95,7 @@ export class Matcher<T extends { _id: string }> {
 			throw new Error(`Invalid selector: ${selector}`);
 		}
 
-		this._selector = EJSON.clone(selector);
-
-		return compileDocumentSelector(selector, this, { isRoot: true });
+		return compileDocumentSelector(selector, this);
 	}
 
 	// Returns a list of key paths the given selector is looking for. It includes

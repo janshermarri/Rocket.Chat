@@ -15,7 +15,6 @@ export interface BaseQuery<T extends { _id: string }, TOptions extends Options<T
 // eslint-disable-next-line @typescript-eslint/naming-convention
 export interface IncompleteUnorderedQuery<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T>
 	extends BaseQuery<T, TOptions, TProjection> {
-	distances?: undefined;
 	sorter: null;
 	ordered: false;
 	results?: IdMap<T['_id'], T>;
@@ -38,7 +37,6 @@ export interface UnorderedQuery<T extends { _id: string }, TOptions extends Opti
 // eslint-disable-next-line @typescript-eslint/naming-convention
 export interface IncompleteOrderedQuery<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T>
 	extends BaseQuery<T, TOptions, TProjection> {
-	distances?: IdMap<T['_id'], number>;
 	ordered: true;
 	sorter: Sorter<T>;
 	results?: T[];

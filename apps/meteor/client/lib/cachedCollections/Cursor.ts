@@ -1,5 +1,6 @@
 import { EJSON } from 'meteor/ejson';
 import { Meteor } from 'meteor/meteor';
+import { Tracker } from 'meteor/tracker';
 import type { Filter } from 'mongodb';
 
 import { DiffSequence } from './DiffSequence';
@@ -11,7 +12,7 @@ import { ObserveHandle } from './ObserveHandle';
 import { OrderedDict } from './OrderedDict';
 import type { Query } from './Query';
 import { Sorter } from './Sorter';
-import { _isPlainObject, _selectorIsId, createMinimongoError, hasOwn, projectionDetails } from './common';
+import { _isPlainObject, createMinimongoError, hasOwn, projectionDetails } from './common';
 
 export type DispatchTransform<TTransform, T, TProjection> = TTransform extends (...args: any) => any
 	? ReturnType<TTransform>
@@ -19,16 +20,54 @@ export type DispatchTransform<TTransform, T, TProjection> = TTransform extends (
 		? T
 		: TProjection;
 
+interface ICursor<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T> {
+	sorter: Sorter<T> | null;
+	matcher: Matcher<T>;
+	skip: number;
+	limit: number | undefined;
+	fields: FieldSpecifier | undefined;
+	reactive: boolean;
+	count(): number;
+	fetch(): DispatchTransform<TOptions['transform'], T, TProjection>[];
+	[Symbol.iterator](): Iterator<DispatchTransform<TOptions['transform'], T, TProjection>>;
+	[Symbol.asyncIterator](): AsyncIterator<DispatchTransform<TOptions['transform'], T, TProjection>>;
+	forEach<TIterationCallback extends (doc: DispatchTransform<TOptions['transform'], T, TProjection>, index: number, cursor: this) => void>(
+		callback: TIterationCallback,
+		thisArg?: ThisParameterType<TIterationCallback>,
+	): void;
+	getTransform(): TOptions['transform'];
+	map<TIterationCallback extends (doc: DispatchTransform<TOptions['transform'], T, TProjection>, index: number, cursor: this) => unknown>(
+		callback: TIterationCallback,
+		thisArg?: ThisParameterType<TIterationCallback>,
+	): ReturnType<TIterationCallback>[];
+	observe(options: ObserveCallbacks<TProjection>): ObserveHandle;
+	observeAsync(options: ObserveCallbacks<TProjection>): Promise<ObserveHandle>;
+	observeChanges(options: ObserveChangesCallbacks<TProjection>): ObserveHandle;
+	observeChangesAsync(options: ObserveChangesCallbacks<TProjection>): Promise<ObserveHandle>;
+	countAsync(): Promise<number>;
+	fetchAsync(): Promise<DispatchTransform<TOptions['transform'], T, TProjection>[]>;
+	forEachAsync<
+		TIterationCallback extends (doc: DispatchTransform<TOptions['transform'], T, TProjection>, index: number, cursor: this) => void,
+	>(
+		callback: TIterationCallback,
+		thisArg: ThisParameterType<TIterationCallback>,
+	): Promise<void>;
+	mapAsync<
+		TIterationCallback extends (doc: DispatchTransform<TOptions['transform'], T, TProjection>, index: number, cursor: this) => unknown,
+	>(
+		callback: TIterationCallback,
+		thisArg: ThisParameterType<TIterationCallback>,
+	): Promise<ReturnType<TIterationCallback>[]>;
+}
+
 // Cursor: a specification for a particular subset of documents, w/ a defined
 // order, limit, and offset.  creating a Cursor with LocalCollection.find(),
-export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T> {
-	collection: LocalCollection<T>;
-
+export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T>
+	implements ICursor<T, TOptions, TProjection>
+{
 	sorter: Sorter<T> | null = null;
 
 	matcher: Matcher<T>;
-
-	private _selectorId: T['_id'] | undefined;
 
 	skip: number;
 
@@ -36,28 +75,21 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 	fields: FieldSpecifier | undefined;
 
-	private _projectionFn: (doc: Partial<T>) => TProjection;
+	protected _projectionFn: (doc: Partial<T>) => TProjection;
 
-	private _transform: TOptions['transform'];
+	protected _transform: TOptions['transform'];
 
-	reactive: boolean | undefined;
+	reactive: boolean;
 
 	// don't call this ctor directly.  use LocalCollection.find().
-	constructor(collection: LocalCollection<T>, selector: Filter<T> | T['_id'], options?: TOptions) {
-		this.collection = collection;
-		this.sorter = null;
+	protected constructor(
+		protected collection: LocalCollection<T>,
+		selector: Filter<T> | T['_id'],
+		options?: TOptions,
+	) {
 		this.matcher = new Matcher(selector);
 
-		if (this._selectorIsIdPerhapsAsObject(selector)) {
-			// stash for fast _id and { _id }
-			this._selectorId = hasOwn.call(selector, '_id') ? (selector as { _id?: T['_id'] })._id : selector;
-		} else {
-			this._selectorId = undefined;
-
-			if (this.matcher.hasGeoQuery() || options?.sort) {
-				this.sorter = new Sorter(options?.sort || []);
-			}
-		}
+		this.sorter = options?.sort ? new Sorter(options.sort) : null;
 
 		this.skip = options?.skip || 0;
 		this.limit = options?.limit;
@@ -67,10 +99,15 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 		this._transform = this.wrapTransform(options?.transform);
 
-		// by default, queries register w/ Tracker when it is available.
-		if (typeof Tracker !== 'undefined') {
-			this.reactive = options?.reactive === undefined ? true : options.reactive;
-		}
+		this.reactive = options?.reactive === undefined ? true : options.reactive;
+	}
+
+	static create<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T>(
+		collection: LocalCollection<T>,
+		selector: Filter<T> | T['_id'],
+		options?: TOptions,
+	): Cursor<T, TOptions, TProjection> {
+		return new Cursor(collection, selector, options);
 	}
 
 	// Wrap a transform function to return objects that have the _id field
@@ -319,7 +356,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	 * @instance
 	 */
 	observeAsync(options: ObserveCallbacks<TProjection>) {
-		return new Promise((resolve) => resolve(this.observe(options)));
+		return new Promise<ObserveHandle>((resolve) => resolve(this.observe(options)));
 	}
 
 	/**
@@ -354,7 +391,6 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 			? {
 					cursor: this,
 					dirty: false,
-					distances: this.matcher.hasGeoQuery() ? new IdMap<T['_id'], number>() : undefined,
 					matcher: this.matcher, // not fast pathed
 					ordered,
 					projectionFn: this._projectionFn,
@@ -380,7 +416,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 			this.collection.queries[qid] = query;
 		}
 
-		query.results = this._getRawObjects({ ordered, distances: query.distances });
+		query.results = this._getRawObjects({ ordered });
 
 		if (this.collection.paused) {
 			query.resultsSnapshot = ordered ? [] : new IdMap<T['_id'], T>();
@@ -489,7 +525,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	 *                           changes
 	 */
 	observeChangesAsync(options: ObserveChangesCallbacks<TProjection>) {
-		return new Promise((resolve) => {
+		return new Promise<ObserveHandle>((resolve) => {
 			const handle = this.observeChanges(options);
 			handle.isReadyPromise.then(() => resolve(handle));
 		});
@@ -497,7 +533,10 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 	// XXX Maybe we need a version of observe that just calls a callback if
 	// anything changed.
-	_depend(changers: Partial<Record<'added' | 'addedBefore' | 'changed' | 'movedBefore' | 'removed', boolean>>, _allowUnordered?: boolean) {
+	private _depend(
+		changers: Partial<Record<'added' | 'addedBefore' | 'changed' | 'movedBefore' | 'removed', boolean>>,
+		_allowUnordered?: boolean,
+	) {
 		if (Tracker.active) {
 			const dependency = new Tracker.Dependency();
 			const notify = dependency.changed.bind(dependency);
@@ -529,23 +568,13 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 	//
 	// If ordered is not set, returns an object mapping from ID to doc (sorter,
 	// skip and limit should not be set).
-	//
-	// If ordered is set and this cursor is a $near geoquery, then this function
-	// will use an _IdMap to track each distance from the $near argument point in
-	// order to use it as a sort key. If an _IdMap is passed in the 'distances'
-	// argument, this function will clear it and use it for this purpose
-	// (otherwise it will just create its own _IdMap). The observeChanges
-	// implementation uses this to remember the distances after this function
-	// returns.
-	_getRawObjects(options: { ordered: true; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> }): T[];
+	_getRawObjects(options: { ordered: true; applySkipLimit?: boolean }): T[];
 
-	_getRawObjects(options: { ordered: false; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> }): IdMap<T['_id'], T>;
+	_getRawObjects(options: { ordered: false; applySkipLimit?: boolean }): IdMap<T['_id'], T>;
 
-	_getRawObjects(options?: { ordered?: boolean; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> }): IdMap<T['_id'], T> | T[];
+	_getRawObjects(options?: { ordered?: boolean; applySkipLimit?: boolean }): IdMap<T['_id'], T> | T[];
 
-	_getRawObjects(
-		options: { ordered?: boolean; applySkipLimit?: boolean; distances?: IdMap<T['_id'], number> } = {},
-	): IdMap<T['_id'], T> | T[] {
+	_getRawObjects(options: { ordered?: boolean; applySkipLimit?: boolean } = {}): IdMap<T['_id'], T> | T[] {
 		// By default this method will respect skip and limit because .fetch(),
 		// .forEach() etc... expect this behaviour. It can be forced to ignore
 		// skip and limit by setting applySkipLimit to false (.count() does this,
@@ -556,39 +585,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		// compatible
 		const results: T[] | IdMap<T['_id'], T> = options.ordered ? [] : new IdMap<T['_id'], T>();
 
-		// fast path for single ID value
-		if (this._selectorId !== undefined) {
-			// If you have non-zero skip and ask for a single id, you get nothing.
-			// This is so it matches the behavior of the '{_id: foo}' path.
-			if (applySkipLimit && this.skip) {
-				return results;
-			}
-
-			const selectedDoc = this.collection.get(this._selectorId);
-			if (selectedDoc) {
-				if (options.ordered) {
-					(results as T[]).push(selectedDoc);
-				} else {
-					(results as IdMap<T['_id'], T>).set(this._selectorId, selectedDoc);
-				}
-			}
-			return results;
-		}
-
 		// slow path for arbitrary selector, sort, skip, limit
-
-		// in the observeChanges case, distances is actually part of the "query"
-		// (ie, live results set) object.  in other cases, distances is only used
-		// inside this function.
-		let distances: IdMap<T['_id'], number> | undefined;
-		if (this.matcher.hasGeoQuery() && options.ordered) {
-			if (options.distances) {
-				distances = options.distances;
-				distances.clear();
-			} else {
-				distances = new IdMap<T['_id'], number>();
-			}
-		}
 
 		Meteor._runFresh(() => {
 			for (const doc of this.collection.all()) {
@@ -596,10 +593,6 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 				if (matchResult.result) {
 					if (options.ordered) {
 						(results as T[]).push(doc);
-
-						if (distances && matchResult.distance !== undefined) {
-							distances.set(doc._id, matchResult.distance);
-						}
 					} else {
 						(results as IdMap<T['_id'], T>).set(doc._id, doc);
 					}
@@ -619,7 +612,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		}
 
 		if (this.sorter) {
-			(results as T[]).sort(this.sorter.getComparator({ distances }));
+			(results as T[]).sort(this.sorter.getComparator());
 		}
 
 		// Return the full set of results if there is no skip or limit or if we're
@@ -867,14 +860,6 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		}
 
 		return !!(callbacks.addedAt || callbacks.changedAt || callbacks.movedTo || callbacks.removedAt);
-	}
-
-	// Is the selector just lookup by _id (shorthand or not)?
-	private _selectorIsIdPerhapsAsObject(selector: unknown): selector is T['_id'] | Pick<T, '_id'> {
-		return (
-			_selectorIsId(selector) ||
-			(_selectorIsId(selector && (selector as { _id?: T['_id'] })._id) && Object.keys(selector as object).length === 1)
-		);
 	}
 
 	static _observeChangesCallbacksAreOrdered<T extends { _id: string }>(callbacks: ObserveChangesCallbacks<T>) {
