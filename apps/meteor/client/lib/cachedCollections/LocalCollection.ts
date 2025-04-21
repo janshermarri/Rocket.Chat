@@ -267,7 +267,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	find(selector: Filter<T> | T['_id'] = {}, options?: Options<T>) {
-		return Cursor.create(this, selector, options);
+		return new Cursor(this, selector, options);
 	}
 
 	findOne(selector?: Filter<T> | T['_id'], options: Options<T> = {}) {
@@ -1297,7 +1297,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	private _insertInResultsSync(query: Query<T, Options<T>, T>, doc: T) {
-		const fields: Partial<T> = EJSON.clone(doc);
+		const fields: Omit<T, '_id'> & Partial<Pick<T, '_id'>> = EJSON.clone(doc);
 
 		delete fields._id;
 
@@ -1333,7 +1333,7 @@ export class LocalCollection<T extends { _id: string }> implements ILocalCollect
 	}
 
 	private async _insertInResultsAsync(query: Query<T, Options<T>, T>, doc: T) {
-		const fields: Partial<T> = EJSON.clone(doc);
+		const fields: Omit<T, '_id'> & Partial<Pick<T, '_id'>> = EJSON.clone(doc);
 
 		delete fields._id;
 

@@ -12,7 +12,7 @@ import { ObserveHandle } from './ObserveHandle';
 import { OrderedDict } from './OrderedDict';
 import type { Query } from './Query';
 import { Sorter } from './Sorter';
-import { _isPlainObject, createMinimongoError, hasOwn, projectionDetails } from './common';
+import { _isPlainObject, createMinimongoError, hasOwn } from './common';
 
 export type DispatchTransform<TTransform, T, TProjection> = TTransform extends (...args: any) => any
 	? ReturnType<TTransform>
@@ -60,14 +60,13 @@ interface ICursor<T extends { _id: string }, TOptions extends Options<T>, TProje
 	): Promise<ReturnType<TIterationCallback>[]>;
 }
 
-// Cursor: a specification for a particular subset of documents, w/ a defined
-// order, limit, and offset.  creating a Cursor with LocalCollection.find(),
+/** a specification for a particular subset of documents, w/ a defined order, limit, and offset */
 export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T>
 	implements ICursor<T, TOptions, TProjection>
 {
-	sorter: Sorter<T> | null = null;
-
 	matcher: Matcher<T>;
+
+	sorter: Sorter<T> | null = null;
 
 	skip: number;
 
@@ -75,39 +74,209 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 	fields: FieldSpecifier | undefined;
 
-	protected _projectionFn: (doc: Partial<T>) => TProjection;
+	protected _projectionFn: (doc: T | Omit<T, '_id'>) => TProjection;
 
 	protected _transform: TOptions['transform'];
 
 	reactive: boolean;
 
-	// don't call this ctor directly.  use LocalCollection.find().
-	protected constructor(
+	constructor(
 		protected collection: LocalCollection<T>,
 		selector: Filter<T> | T['_id'],
 		options?: TOptions,
 	) {
 		this.matcher = new Matcher(selector);
-
 		this.sorter = options?.sort ? new Sorter(options.sort) : null;
-
-		this.skip = options?.skip || 0;
+		this.skip = options?.skip ?? 0;
 		this.limit = options?.limit;
-		this.fields = options?.projection || options?.fields;
-
+		this.fields = options?.projection ?? options?.fields;
 		this._projectionFn = this._compileProjection(this.fields || {});
-
 		this._transform = this.wrapTransform(options?.transform);
-
 		this.reactive = options?.reactive === undefined ? true : options.reactive;
 	}
 
-	static create<T extends { _id: string }, TOptions extends Options<T>, TProjection extends T = T>(
-		collection: LocalCollection<T>,
-		selector: Filter<T> | T['_id'],
-		options?: TOptions,
-	): Cursor<T, TOptions, TProjection> {
-		return new Cursor(collection, selector, options);
+	private _compileProjection(fields: FieldSpecifier) {
+		this._checkSupportedProjection(fields);
+
+		const _idProjection = fields._id === undefined ? true : fields._id;
+		const details = this.projectionDetails(fields);
+
+		// returns transformed doc according to ruleTree
+		const transform = (doc: any, ruleTree: any): any => {
+			// Special case for "sets"
+			if (Array.isArray(doc)) {
+				return doc.map((subdoc) => transform(subdoc, ruleTree));
+			}
+
+			const result = details.including ? {} : EJSON.clone(doc);
+
+			Object.keys(ruleTree).forEach((key) => {
+				if (doc == null || !hasOwn.call(doc, key)) {
+					return;
+				}
+
+				const rule = ruleTree[key];
+
+				if (rule === Object(rule)) {
+					// For sub-objects/subsets we branch
+					if (doc[key as keyof typeof doc] === Object(doc[key as keyof typeof doc])) {
+						result[key as keyof typeof doc] = transform(doc[key as keyof typeof doc], rule);
+					}
+				} else if (details.including) {
+					// Otherwise we don't even touch this subfield
+					result[key as keyof typeof doc] = EJSON.clone(doc[key as keyof typeof doc]);
+				} else {
+					delete result[key as keyof typeof doc];
+				}
+			});
+
+			return doc != null ? result : doc;
+		};
+
+		return (doc: T | Omit<T, '_id'>) => {
+			const result = transform(doc, details.tree);
+
+			if (_idProjection && '_id' in doc) {
+				result._id = doc._id;
+			}
+
+			if (!_idProjection && hasOwn.call(result, '_id')) {
+				delete result._id;
+			}
+
+			return result;
+		};
+	}
+
+	private _checkSupportedProjection(fields: FieldSpecifier) {
+		if (fields !== Object(fields) || Array.isArray(fields)) {
+			throw createMinimongoError('fields option must be an object');
+		}
+
+		Object.keys(fields).forEach((keyPath) => {
+			if (keyPath.split('.').includes('$')) {
+				throw createMinimongoError("Minimongo doesn't support $ operator in projections yet.");
+			}
+
+			const value = fields[keyPath];
+
+			if (typeof value === 'object' && ['$elemMatch', '$meta', '$slice'].some((key) => key in value)) {
+				throw createMinimongoError("Minimongo doesn't support operators in projections yet.");
+			}
+
+			if (![1, 0, true, false].includes(value)) {
+				throw createMinimongoError('Projection values should be one of 1, 0, true, or false');
+			}
+		});
+	}
+
+	// Traverses the keys of passed projection and constructs a tree where all
+	// leaves are either all True or all False
+	// @returns Object:
+	//  - tree - Object - tree representation of keys involved in projection
+	//  (exception for '_id' as it is a special case handled separately)
+	//  - including - Boolean - "take only certain fields" type of projection
+	private projectionDetails(fields: FieldSpecifier) {
+		// Find the non-_id keys (_id is handled specially because it is included
+		// unless explicitly excluded). Sort the keys, so that our code to detect
+		// overlaps like 'foo' and 'foo.bar' can assume that 'foo' comes first.
+		let fieldsKeys = Object.keys(fields).sort();
+
+		// If _id is the only field in the projection, do not remove it, since it is
+		// required to determine if this is an exclusion or exclusion. Also keep an
+		// inclusive _id, since inclusive _id follows the normal rules about mixing
+		// inclusive and exclusive fields. If _id is not the only field in the
+		// projection and is exclusive, remove it so it can be handled later by a
+		// special case, since exclusive _id is always allowed.
+		if (!(fieldsKeys.length === 1 && fieldsKeys[0] === '_id') && !(fieldsKeys.includes('_id') && fields._id)) {
+			fieldsKeys = fieldsKeys.filter((key) => key !== '_id');
+		}
+
+		let including: boolean | null = null; // Unknown
+
+		for (const keyPath of fieldsKeys) {
+			const rule = !!fields[keyPath];
+
+			if (including === null) {
+				including = rule;
+			}
+
+			// This error message is copied from MongoDB shell
+			if (including !== rule) {
+				throw createMinimongoError('You cannot currently mix including and excluding fields.');
+			}
+		}
+
+		const projectionRulesTree = this.pathsToTree(
+			fieldsKeys,
+			(_path) => including,
+			(_node, path, fullPath) => {
+				// Check passed projection fields' keys: If you have two rules such as
+				// 'foo.bar' and 'foo.bar.baz', then the result becomes ambiguous. If
+				// that happens, there is a probability you are doing something wrong,
+				// framework should notify you about such mistake earlier on cursor
+				// compilation step than later during runtime.  Note, that real mongo
+				// doesn't do anything about it and the later rule appears in projection
+				// project, more priority it takes.
+				//
+				// Example, assume following in mongo shell:
+				// > db.coll.insert({ a: { b: 23, c: 44 } })
+				// > db.coll.find({}, { 'a': 1, 'a.b': 1 })
+				// {"_id": ObjectId("520bfe456024608e8ef24af3"), "a": {"b": 23}}
+				// > db.coll.find({}, { 'a.b': 1, 'a': 1 })
+				// {"_id": ObjectId("520bfe456024608e8ef24af3"), "a": {"b": 23, "c": 44}}
+				//
+				// Note, how second time the return set of keys is different.
+				throw createMinimongoError(
+					`both ${fullPath} and ${path} found in fields option, ` +
+						'using both of them may trigger unexpected behavior. Did you mean to ' +
+						'use only one of them?',
+				);
+			},
+		);
+
+		return { including, tree: projectionRulesTree };
+	}
+
+	private pathsToTree(
+		paths: string[],
+		newLeafFn: (path: string) => unknown,
+		conflictFn: (node: unknown, path: string, fullPath: string) => unknown,
+		root: Record<string, unknown> = {},
+	) {
+		for (const path of paths) {
+			const pathArray = path.split('.');
+			let tree = root;
+
+			// use .every just for iteration with break
+			const success = pathArray.slice(0, -1).every((key, i) => {
+				if (!(key in tree)) {
+					tree[key] = {};
+				} else if (tree[key] !== Object(tree[key])) {
+					tree[key] = conflictFn(tree[key], pathArray.slice(0, i + 1).join('.'), path);
+
+					// break out of loop if we are failing for this path
+					if (tree[key] !== Object(tree[key])) {
+						return false;
+					}
+				}
+
+				tree = tree[key] as Record<string, unknown>;
+
+				return true;
+			});
+
+			if (success) {
+				const lastKey = pathArray[pathArray.length - 1];
+				if (hasOwn.call(tree, lastKey)) {
+					tree[lastKey] = conflictFn(tree[lastKey], path, path);
+				} else {
+					tree[lastKey] = newLeafFn(path);
+				}
+			}
+		}
+
+		return root;
 	}
 
 	// Wrap a transform function to return objects that have the _id field
@@ -130,10 +299,10 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		}
 
 		const wrapped = (doc: any) => {
-			if (!hasOwn.call(doc, '_id')) {
+			if (!('_id' in doc)) {
 				// XXX do we ever have a transform on the oplog's collection? because that
 				// collection has no _id.
-				throw new Error('can only transform documents with _id');
+				throw createMinimongoError('can only transform documents with _id');
 			}
 
 			const id = doc._id;
@@ -460,7 +629,7 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 
 		if (!options._suppress_initial && !this.collection.paused) {
 			const handler = (doc: T) => {
-				const fields: Partial<T> & { _id?: T['_id'] } = EJSON.clone(doc);
+				const fields: Omit<T, '_id'> & Partial<Pick<T, '_id'>> = EJSON.clone(doc);
 
 				delete fields._id;
 
@@ -868,88 +1037,6 @@ export class Cursor<T extends { _id: string }, TOptions extends Options<T>, TPro
 		}
 
 		return !!(callbacks.addedBefore || callbacks.movedBefore);
-	}
-
-	private _checkSupportedProjection(fields: FieldSpecifier) {
-		if (fields !== Object(fields) || Array.isArray(fields)) {
-			throw createMinimongoError('fields option must be an object');
-		}
-
-		Object.keys(fields).forEach((keyPath) => {
-			if (keyPath.split('.').includes('$')) {
-				throw createMinimongoError("Minimongo doesn't support $ operator in projections yet.");
-			}
-
-			const value = fields[keyPath];
-
-			if (typeof value === 'object' && ['$elemMatch', '$meta', '$slice'].some((key) => hasOwn.call(value, key))) {
-				throw createMinimongoError("Minimongo doesn't support operators in projections yet.");
-			}
-
-			if (![1, 0, true, false].includes(value)) {
-				throw createMinimongoError('Projection values should be one of 1, 0, true, or false');
-			}
-		});
-	}
-
-	// Knows how to compile a fields projection to a predicate function.
-	// @returns - Function: a closure that filters out an object according to the
-	//            fields projection rules:
-	//            @param obj - Object: MongoDB-styled document
-	//            @returns - Object: a document with the fields filtered out
-	//                       according to projection rules. Doesn't retain subfields
-	//                       of passed argument.
-	private _compileProjection(fields: FieldSpecifier) {
-		this._checkSupportedProjection(fields);
-
-		const _idProjection = fields._id === undefined ? true : fields._id;
-		const details = projectionDetails(fields);
-
-		// returns transformed doc according to ruleTree
-		const transform = (doc: any, ruleTree: any): any => {
-			// Special case for "sets"
-			if (Array.isArray(doc)) {
-				return doc.map((subdoc) => transform(subdoc, ruleTree));
-			}
-
-			const result = details.including ? {} : EJSON.clone(doc);
-
-			Object.keys(ruleTree).forEach((key) => {
-				if (doc == null || !hasOwn.call(doc, key)) {
-					return;
-				}
-
-				const rule = ruleTree[key];
-
-				if (rule === Object(rule)) {
-					// For sub-objects/subsets we branch
-					if (doc[key] === Object(doc[key])) {
-						result[key] = transform(doc[key], rule);
-					}
-				} else if (details.including) {
-					// Otherwise we don't even touch this subfield
-					result[key] = EJSON.clone(doc[key]);
-				} else {
-					delete result[key];
-				}
-			});
-
-			return doc != null ? result : doc;
-		};
-
-		return (doc: any) => {
-			const result = transform(doc, details.tree);
-
-			if (_idProjection && hasOwn.call(doc, '_id')) {
-				result._id = doc._id;
-			}
-
-			if (!_idProjection && hasOwn.call(result, '_id')) {
-				delete result._id;
-			}
-
-			return result;
-		};
 	}
 }
 

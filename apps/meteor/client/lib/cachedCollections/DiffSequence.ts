@@ -30,7 +30,7 @@ export class DiffSequence {
 		oldResults: T[],
 		newResults: T[],
 		observer: Observer<T>,
-		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
+		options?: { projectionFn?: (doc: T | Omit<T, '_id'>) => TProjection },
 	): void;
 
 	static diffQueryChanges<T extends { _id: string }, TProjection extends T = T>(
@@ -38,7 +38,7 @@ export class DiffSequence {
 		oldResults: IdMap<T['_id'], T>,
 		newResults: IdMap<T['_id'], T>,
 		observer: Observer<T>,
-		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
+		options?: { projectionFn?: (doc: T | Omit<T, '_id'>) => TProjection },
 	): void;
 
 	static diffQueryChanges<T extends { _id: string }, TProjection extends T = T>(
@@ -46,7 +46,7 @@ export class DiffSequence {
 		oldResults: T[] | IdMap<T['_id'], T>,
 		newResults: T[] | IdMap<T['_id'], T>,
 		observer: Observer<T>,
-		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
+		options?: { projectionFn?: (doc: T | Omit<T, '_id'>) => TProjection },
 	): void;
 
 	static diffQueryChanges<T extends { _id: string }, TProjection extends T = T>(
@@ -54,7 +54,7 @@ export class DiffSequence {
 		oldResults: T[] | IdMap<T['_id'], T>,
 		newResults: T[] | IdMap<T['_id'], T>,
 		observer: Observer<T>,
-		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
+		options?: { projectionFn?: (doc: T | Omit<T, '_id'>) => TProjection },
 	): void {
 		if (ordered) DiffSequence.diffQueryOrderedChanges(oldResults as T[], newResults as T[], observer, options);
 		else DiffSequence.diffQueryUnorderedChanges(oldResults as IdMap<T['_id'], T>, newResults as IdMap<T['_id'], T>, observer, options);
@@ -64,10 +64,10 @@ export class DiffSequence {
 		oldResults: IdMap<T['_id'], T>,
 		newResults: IdMap<T['_id'], T>,
 		observer: Observer<T>,
-		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
+		options?: { projectionFn?: (doc: T | Omit<T, '_id'>) => TProjection },
 	): void {
 		options = options || {};
-		const projectionFn: (doc: Partial<T>) => TProjection = options.projectionFn || EJSON.clone;
+		const projectionFn: (doc: T | Omit<T, '_id'>) => TProjection = options.projectionFn || EJSON.clone;
 
 		if (observer.movedBefore) {
 			throw new Error('_diffQueryUnordered called with a movedBefore observer!');
@@ -102,7 +102,7 @@ export class DiffSequence {
 		oldResults: T[],
 		newResults: T[],
 		observer: Observer<T>,
-		options?: { projectionFn?: (doc: Partial<T>) => TProjection },
+		options?: { projectionFn?: (doc: T | Omit<T, '_id'>) => TProjection },
 	): void {
 		options = options || {};
 		const projectionFn = options.projectionFn || EJSON.clone;
