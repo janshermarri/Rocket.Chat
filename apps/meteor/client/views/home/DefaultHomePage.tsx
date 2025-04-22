@@ -13,7 +13,7 @@ const DefaultHomePage = (): ReactElement => {
 			<HomePageHeader />
 			<PageScrollableContent>
 				<Box is='h2' fontScale='h1' mb={20} data-qa-id='homepage-welcome-text'>
-					Welcome to Transmit Chat
+					Welcome to BillerBay Chat
 				</Box>
 			</PageScrollableContent>
 		</Page>
